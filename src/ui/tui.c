@@ -848,10 +848,13 @@ static void input_key(App *a, wint_t key, bool special) {
                 if (matches) a->command_index = (a->command_index + 1) % matches;
                 else history_move(a, -1);
                 break;
-            case KEY_PPAGE: a->scroll += LINES > 20 ? LINES / 2 : 5; break;
+            case KEY_PPAGE:
+                /* Scroll up by exactly one rendered conversation line. */
+                if (a->scroll < INT_MAX) ++a->scroll;
+                break;
             case KEY_NPAGE:
-                a->scroll -= LINES > 20 ? LINES / 2 : 5;
-                if (a->scroll < 0) a->scroll = 0;
+                /* Scroll down by exactly one rendered conversation line. */
+                if (a->scroll > 0) --a->scroll;
                 break;
             case KEY_ENTER: if (matches) palette_enter(a); else submit(a); break;
             case KEY_F(1): show_help_message(a); break;
