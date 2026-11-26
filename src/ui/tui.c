@@ -865,7 +865,20 @@ static void command(App *a, const char *input) {
     }
     if (!strcmp(input, "/delete")) {
         browse_chats(a);
-        if (a->chats_open && a->saved_chat_count) a->confirm_delete = true;
+        if (!a->chats_open) return;
+        bool current_found = false;
+        for (size_t i = 0; i < a->saved_chat_count; ++i) {
+            if (!strcmp(a->saved_chats[i].id, a->active_chat.id)) {
+                a->saved_chat_index = (int)i;
+                current_found = true;
+                break;
+            }
+        }
+        if (current_found) a->confirm_delete = true;
+        else {
+            a->chats_open = false;
+            set_status(a, "Current chat is not saved; nothing to delete");
+        }
         return;
     }
     if (!strcmp(input, "/help")) { show_help_message(a); return; }
