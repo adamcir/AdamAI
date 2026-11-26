@@ -1,4 +1,4 @@
-/* Adam AI - GPL-3.0-only */
+/* AdamAI - GPL-3.0-only */
 #include "adam/ollama.h"
 #include <curl/curl.h>
 #include <json-c/json.h>
@@ -161,7 +161,7 @@ bool adam_ollama_start(AdamStream *s, const AdamChat *chat,
     struct json_object *sys = json_object_new_object();
     json_object_object_add(sys, "role", json_object_new_string("system"));
     json_object_object_add(sys, "content", json_object_new_string(
-        "You are Adam AI, a local AI assistant for Adava Development. "
+        "You are AdamAI, a local AI assistant for Adava Development. "
         "Answer in the user's language. Be accurate and concise. "
         "You cannot access files, run programs, or browse the web yet; never claim you have done so."));
     json_object_array_add(messages, sys);

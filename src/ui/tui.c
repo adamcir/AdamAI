@@ -1,4 +1,4 @@
-/* Adam AI - GPL-3.0-only
+/* AdamAI - GPL-3.0-only
  * Original ncursesw user interface with a compact coding-assistant layout.
  * Visual inspiration: OpenCode, Codex CLI, Claude Code. No code copied.
  */
@@ -63,7 +63,7 @@ static const Command commands[] = {
     {"/sidebar", "Toggle workspace sidebar", false},
     {"/theme", "Switch dark / light appearance", false},
     {"/status", "Show current session settings", false},
-    {"/quit", "Exit Adam AI", false}
+    {"/quit", "Exit AdamAI", false}
 };
 #define COMMAND_COUNT (sizeof(commands) / sizeof(commands[0]))
 
@@ -246,7 +246,7 @@ static void build_view(View *v, const App *a, int width) {
             view_wrap(v, m->content, width - 2, C_PANEL, 2, true);
             view_line(v, L"", 0, C_NORMAL, 0, false, true);
         } else {
-            view_label(v, "◆  ADAM AI", C_ACCENT, 0, true, false);
+            view_label(v, "◆  AdamAI", C_ACCENT, 0, true, false);
             if (m->thinking && *m->thinking) {
                 view_label(v, a->show_thinking ? "  ▾  Thinking" :
                            "  ▸  Thinking  ·  Ctrl+T to expand", C_THINK, 0, false, false);
@@ -324,34 +324,38 @@ static void set_theme(bool light) {
     if (!has_colors()) return;
     start_color();
     use_default_colors();
+
+    /* AdamAI Classic: light green + orange, designed for dark and light TUI.
+     * 256-color terminals preserve the softer palette; basic terminals get
+     * green/yellow equivalents. */
     if (COLORS >= 256 && COLOR_PAIRS > C_SOFT) {
         int bg = light ? 255 : 234;
-        init_pair(C_NORMAL, light ? 235 : 252, bg);
-        init_pair(C_ACCENT, light ? 25 : 117, bg);
-        init_pair(C_MUTED, light ? 243 : 245, bg);
-        init_pair(C_USER, light ? 22 : 150, light ? 254 : 237);
-        init_pair(C_THINK, light ? 95 : 180, bg);
-        init_pair(C_GOOD, light ? 28 : 114, bg);
-        init_pair(C_ERROR, light ? 160 : 203, bg);
-        init_pair(C_PANEL, light ? 235 : 252, light ? 254 : 237);
-        init_pair(C_FRAME, light ? 247 : 240, bg);
-        init_pair(C_SELECT, light ? 255 : 234, light ? 25 : 117);
-        init_pair(C_WARNING, light ? 130 : 215, bg);
-        init_pair(C_SOFT, light ? 239 : 251, light ? 253 : 236);
+        init_pair(C_NORMAL,  light ? 235 : 252, bg);
+        init_pair(C_ACCENT,  light ?  28 : 150, bg);  /* light green / forest green */
+        init_pair(C_MUTED,   light ? 243 : 245, bg);
+        init_pair(C_USER,    light ? 166 : 214, light ? 254 : 236); /* orange */
+        init_pair(C_THINK,   light ? 166 : 215, bg);  /* softer orange */
+        init_pair(C_GOOD,    light ?  28 : 156, bg);  /* active / ready */
+        init_pair(C_ERROR,   light ? 160 : 203, bg);
+        init_pair(C_PANEL,   light ? 235 : 252, light ? 254 : 236);
+        init_pair(C_FRAME,   light ? 108 :  65, bg);  /* muted green border */
+        init_pair(C_SELECT,  light ? 235 : 234, light ? 215 : 150);
+        init_pair(C_WARNING, light ? 166 : 214, bg);
+        init_pair(C_SOFT,    light ?  28 : 150, light ? 253 : 236);
         bkgd(COLOR_PAIR(C_NORMAL));
     } else {
         init_pair(C_NORMAL, COLOR_WHITE, -1);
-        init_pair(C_ACCENT, COLOR_CYAN, -1);
-        init_pair(C_MUTED, COLOR_BLUE, -1);
-        init_pair(C_USER, COLOR_GREEN, -1);
-        init_pair(C_THINK, COLOR_MAGENTA, -1);
+        init_pair(C_ACCENT, COLOR_GREEN, -1);
+        init_pair(C_MUTED, COLOR_WHITE, -1);
+        init_pair(C_USER, COLOR_YELLOW, -1);
+        init_pair(C_THINK, COLOR_YELLOW, -1);
         init_pair(C_GOOD, COLOR_GREEN, -1);
         init_pair(C_ERROR, COLOR_RED, -1);
         init_pair(C_PANEL, COLOR_WHITE, -1);
-        init_pair(C_FRAME, COLOR_BLUE, -1);
-        init_pair(C_SELECT, COLOR_BLACK, COLOR_CYAN);
+        init_pair(C_FRAME, COLOR_GREEN, -1);
+        init_pair(C_SELECT, COLOR_BLACK, COLOR_GREEN);
         init_pair(C_WARNING, COLOR_YELLOW, -1);
-        init_pair(C_SOFT, COLOR_WHITE, -1);
+        init_pair(C_SOFT, COLOR_GREEN, -1);
         bkgd(COLOR_PAIR(C_NORMAL));
     }
 }
@@ -378,7 +382,7 @@ static void draw_sidebar(const App *a, int left, int top, int height) {
     const char *project = strrchr(cwd, '/');
     line_at(top + 2, inner, width, project && project[1] ? project + 1 : cwd,
             C_NORMAL, true);
-    line_at(top + 4, inner, width, "MODEL", C_MUTED, true);
+    line_at(top + 4, inner, width, "MODEL", C_THINK, true);
     line_at(top + 5, inner, width, a->model, C_NORMAL, false);
     line_at(top + 7, inner, width, "PROVIDER", C_MUTED, true);
     line_at(top + 8, inner, width, "Ollama  /  local", C_NORMAL, false);
@@ -387,7 +391,7 @@ static void draw_sidebar(const App *a, int left, int top, int height) {
         char info[96];
         snprintf(info, sizeof(info), "Chat %02u  ·  %zu messages", a->session, a->chat.count);
         line_at(top + 11, inner, width, info, C_NORMAL, false);
-        line_at(top + 13, inner, width, "REASONING", C_MUTED, true);
+        line_at(top + 13, inner, width, "REASONING", C_THINK, true);
         line_at(top + 14, inner, width, a->show_thinking ? "Visible" : "Collapsed", C_NORMAL, false);
     }
     if (height > 20) {
@@ -405,13 +409,13 @@ static void draw_sidebar(const App *a, int left, int top, int height) {
 static void draw_welcome(const App *a, int x, int y, int width, int height) {
     int mid = y + height / 2;
     if (height < 10) {
-        line_at(y + 1, x + 2, width - 4, "◆  ADAM AI", C_ACCENT, true);
+        line_at(y + 1, x + 2, width - 4, "◆  AdamAI", C_ACCENT, true);
         line_at(y + 3, x + 2, width - 4, "Ask anything.  /help  ·  Ctrl+P", C_MUTED, false);
         return;
     }
-    const char *title = "◆  ADAM AI";
+    const char *title = "◆  AdamAI";
     const char *sub = "Your local development assistant";
-    int title_w = 10, sub_w = 32;
+    int title_w = 9, sub_w = 32;
     line_at(mid - 4, x + (width - title_w) / 2, width, title, C_ACCENT, true);
     line_at(mid - 2, x + (width - sub_w) / 2, width, sub, C_NORMAL, false);
     line_at(mid, x + 2, width - 4, "Ask a question, explore code, or plan your next change.", C_MUTED, false);
@@ -468,7 +472,7 @@ static void draw_help(int x, int width, int top, int available) {
     int w = width < 68 ? width : 68;
     int left = x + (width - w) / 2;
     frame(y, left, h, w, C_ACCENT, C_PANEL);
-    line_at(y + 1, left + 3, w - 6, "ADAM AI  /  SHORTCUTS", C_ACCENT, true);
+    line_at(y + 1, left + 3, w - 6, "AdamAI  /  SHORTCUTS", C_ACCENT, true);
     const char *rows[] = {
         "Enter         Send message or run command",
         "Ctrl+O        Insert newline in composer",
@@ -477,7 +481,7 @@ static void draw_help(int x, int width, int top, int available) {
         "Ctrl+T        Expand / collapse reasoning",
         "Ctrl+L        Start new conversation",
         "Ctrl+C        Cancel streaming response",
-        "Ctrl+Q        Exit Adam AI",
+        "Ctrl+Q        Exit AdamAI",
         "PgUp/PgDn     Scroll through conversation",
         "Up/Down       Command selection / prompt history",
         "Ctrl+A/E/U    Start / end / clear input",
@@ -508,7 +512,7 @@ static void draw_editor(const App *a, const AdamEditorCell *cells,
     line_at(top + 1, x + 2, 2, "❯", C_ACCENT, true);
     if (!a->input_len) {
         line_at(top + 1, text_x, text_w,
-                "Ask Adam AI, or type / for commands...", C_MUTED, false);
+                "Ask AdamAI, or type / for commands...", C_MUTED, false);
         return;
     }
 
@@ -560,12 +564,12 @@ static void draw(App *a) {
     int composer_top = h - edit_rows - 4;
     int available = composer_top - top;
     fill_span(0, 0, w, C_NORMAL);
-    line_at(0, 2, content_right - 4, "◆  ADAM AI", C_ACCENT, true);
+    line_at(0, 2, content_right - 4, "◆  AdamAI", C_ACCENT, true);
     char right[192];
     snprintf(right, sizeof(right), " %s   %s ", a->model, a->busy ? "● Generating" : "● Local");
     int n = (int)strlen(right);
     if (n < content_right - 23)
-        line_at(0, content_right - n - 2, n, right, a->busy ? C_WARNING : C_MUTED, false);
+        line_at(0, content_right - n - 2, n, right, a->busy ? C_WARNING : C_GOOD, false);
     char cwd[PATH_MAX + 32];
     cwd_short(cwd, sizeof(cwd));
     char work[PATH_MAX + 64];

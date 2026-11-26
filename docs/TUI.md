@@ -1,12 +1,18 @@
-# Adam AI terminal interface
+# AdamAI terminal interface
 
-Adam AI includes an **original ncursesw TUI** with a conversation-first layout,
+AdamAI includes an **original ncursesw TUI** with a conversation-first layout,
 visually inspired by OpenCode, Codex CLI, and Claude Code. No code or graphical
 assets from those products were copied.
 
+## Palette
+
+The **AdamAI Classic** theme uses light green for branding and active states,
+orange for user messages and reasoning, muted green for borders, and neutral
+text backgrounds. The palette also has a light variant and an 8-color fallback.
+
 ## Layout
 
-- Compact top bar for Adam AI name, model, and generation status.
+- Compact top bar for AdamAI name, model, and generation status.
 - Centered chat transcript, capped at 94 terminal columns for readability.
 - Visually separated user panels, assistant messages, collapsed reasoning,
   simple Markdown block rendering (headings, bullets, quotes, fenced code).

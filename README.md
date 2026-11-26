@@ -1,6 +1,6 @@
-# Adam AI
+# AdamAI
 
-**Adam AI** is a local AI assistant for Adava Development, written in C17.
+**AdamAI** is a local AI assistant for Adava Development, written in C17.
 
 Its first user interface is a native **ncursesw terminal chat** with an original
 conversation-first layout inspired by OpenCode, Codex CLI, and Claude Code.
@@ -8,24 +8,28 @@ It is **not** a fork of those applications and does not include their source cod
 
 ## TUI preview (0.1.0-dev)
 
+Default appearance uses the **AdamAI Classic** palette: light green accents,
+warm orange for user messages and reasoning, and subtle green borders.
+Both dark (default) and light modes share this green/orange identity.
+
 ```text
- ◆  ADAM AI                           gpt-oss:20b   ● Local
+ ◆  AdamAI                           gpt-oss:20b   ● Local
  WORKSPACE / ~/Projects/WORLD-Game
  ─────────────────────────────────────────────────────────
 
-                   ◆  ADAM AI
+                   ◆  AdamAI
              Your local development assistant
 
   ┃ YOU
   ┃ Help me fix the renderer in WORLD.
   ┃
 
-  ◆  ADAM AI
+  ◆  AdamAI
     ▸ Thinking · Ctrl+T to expand
     First, I would review the existing Vulkan code ...
 
  ┌───────────────────────────────────────────────────────┐
- │ ❯ Ask Adam AI, or type / for commands...             │
+ │ ❯ Ask AdamAI, or type / for commands...             │
  └───────────────────────────────────────────────────────┘
  Enter send · Ctrl+O newline · Ctrl+P commands
 ```
