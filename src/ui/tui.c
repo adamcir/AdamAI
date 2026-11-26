@@ -9,6 +9,7 @@
 #include "adam/chat.h"
 #include "adam/chat_store.h"
 #include "adam/ollama.h"
+#include "adam/web_fetch.h"
 #include "adam/text_wrap.h"
 #include <ncursesw/curses.h>
 #include <curl/curl.h>
@@ -64,6 +65,7 @@ static const Command commands[] = {
     {"/rename", "Rename current conversation", true},
     {"/delete", "Delete current chat (confirmation required)", false},
     {"/model", "Choose an Ollama model", true},
+    {"/web", "Web access: on/off, or /web HTTPS_URL", true},
     {"/thinking", "Toggle reasoning display", false},
     {"/sidebar", "Toggle workspace sidebar", false},
     {"/theme", "Switch dark / light appearance", false},
@@ -96,6 +98,7 @@ typedef struct {
     int saved_chat_index;
     char chat_directory[PATH_MAX];
     bool store_ready, dirty, chats_open, confirm_delete;
+    bool web_enabled;
     time_t last_save;
 } App;
 
@@ -408,7 +411,9 @@ static void draw_sidebar(const App *a, int left, int top, int height) {
     if (height > 20) {
         line_at(top + 17, inner, width, "REASONING", C_THINK, true);
         line_at(top + 18, inner, width, a->show_thinking ? "Visible" : "Collapsed", C_NORMAL, false);
-        line_at(top + 19, inner, width, "Agent tools: coming soon", C_MUTED, false);
+        line_at(top + 19, inner, width,
+                a->web_enabled ? "Web: enabled" : "Web: disabled",
+                a->web_enabled ? C_GOOD : C_MUTED, false);
     }
     if (height > 26) {
         line_at(top + height - 5, inner, width, "Ctrl+K  chats", C_MUTED, false);
@@ -491,6 +496,7 @@ static void draw_help(int x, int width, int top, int available) {
         "Enter         Send message or run command",
         "Ctrl+O        Insert newline in composer",
         "Ctrl+P        Open slash-command palette",
+        "Web           /web on/off or /web HTTPS_URL",
         "Ctrl+K        Browse saved chats",
         "Ctrl+B        Show / hide workspace sidebar",
         "Ctrl+T        Expand / collapse reasoning",
@@ -905,6 +911,21 @@ static void command(App *a, const char *input) {
         return;
     }
     if (!strcmp(input, "/help")) { show_help_message(a); return; }
+    if (!strcmp(input, "/web") || !strcmp(input, "/web status")) {
+        set_status(a, a->web_enabled ? "Web tool enabled (/web off to disable)" :
+                                     "Web tool disabled (/web on to enable)");
+        return;
+    }
+    if (!strcmp(input, "/web on")) {
+        a->web_enabled = true;
+        set_status(a, "Web tool enabled for this session");
+        return;
+    }
+    if (!strcmp(input, "/web off")) {
+        a->web_enabled = false;
+        set_status(a, "Web tool disabled for future requests");
+        return;
+    }
     if (!strcmp(input, "/thinking")) {
         a->show_thinking = !a->show_thinking;
         set_status(a, a->show_thinking ? "Reasoning expanded" : "Reasoning collapsed");
@@ -956,7 +977,28 @@ static void submit(App *a) {
     char *text = malloc(size + 1);
     if (!text) { set_status(a, "Out of memory"); return; }
     wcstombs(text, a->input, size + 1);
-    bool is_command = text[0] == '/';
+
+    /* /web HTTPS_URL is a one-shot explicit permission to read that URL,
+     * even if automatic model web access is currently off. */
+    bool direct_web = !strncmp(text, "/web https://", 13);
+    if (direct_web) {
+        char error[200] = "";
+        const char *url = text + 5;
+        if (!adam_web_validate_url(url, error, sizeof(error))) {
+            set_status(a, error);
+            free(text);
+            return;
+        }
+        size_t n = strlen(url) + 150;
+        char *prompt = malloc(n);
+        if (!prompt) { free(text); set_status(a, "Out of memory"); return; }
+        snprintf(prompt, n,
+                 "Read this page using the web_fetch tool, then summarize it "
+                 "and cite the source URL: %s", url);
+        free(text);
+        text = prompt;
+    }
+    bool is_command = text[0] == '/' && !direct_web;
     if (!is_command) history_add(a, a->input);
     input_set(a, L"");
     a->scroll = 0;
@@ -973,7 +1015,8 @@ static void submit(App *a) {
         set_status(a, "Out of memory"); return;
     }
     (void)save_current_chat(a); /* Save the prompt BEFORE starting inference. */
-    if (!adam_ollama_start(&a->stream, &a->chat, a->model, a->endpoint, a->think_level)) {
+    if (!adam_ollama_start(&a->stream, &a->chat, a->model, a->endpoint,
+                           a->think_level, a->web_enabled || direct_web)) {
         adam_text_append(&a->chat.items[a->chat.count - 1].content, "Could not launch model request.");
         a->dirty = true;
         (void)save_current_chat(a);
@@ -1000,6 +1043,16 @@ static void process_stream(App *a) {
                 adam_text_append(&m->content, event->text);
                 a->dirty = true;
                 set_status(a, "Writing response...");
+                break;
+            case ADAM_STREAM_TOOL:
+                if (event->text) {
+                    if (m->content && *m->content) adam_text_append(&m->content, "\n");
+                    adam_text_append(&m->content, "[Web] ");
+                    adam_text_append(&m->content, event->text);
+                    adam_text_append(&m->content, "\n");
+                    a->dirty = true;
+                }
+                set_status(a, "Web tool: loading page...");
                 break;
             case ADAM_STREAM_ERROR:
                 if (m->content && *m->content) adam_text_append(&m->content, "\n");
@@ -1206,6 +1259,10 @@ int adam_tui_run(void) {
     if (!app.endpoint || !*app.endpoint) app.endpoint = "http://127.0.0.1:11434";
     app.think_level = getenv("ADAM_THINK");
     if (!app.think_level || !*app.think_level) app.think_level = "medium";
+    const char *web_env = getenv("ADAM_WEB_ENABLED");
+    app.web_enabled = web_env && (!strcmp(web_env, "1") ||
+                                  !strcmp(web_env, "true") ||
+                                  !strcmp(web_env, "yes"));
     const char *theme = getenv("ADAM_TUI_THEME");
     app.light_theme = theme && !strcmp(theme, "light");
     set_status(&app, "Type /chats or press Ctrl+K to browse chats");

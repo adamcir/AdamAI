@@ -15,6 +15,7 @@ find_package(Threads REQUIRED)
 add_library(adam_core STATIC
     src/core/chat.c
     src/core/chat_store.c
+    src/tools/web_fetch.c
     src/backends/ollama.c
 )
 target_include_directories(adam_core PUBLIC include)
@@ -49,4 +50,18 @@ if(BUILD_TESTING)
     add_executable(adam_chat_store_test tests/test_chat_store.c)
     target_link_libraries(adam_chat_store_test PRIVATE adam_core)
     add_test(NAME chat_store COMMAND adam_chat_store_test)
+
+    add_executable(adam_web_fetch_test tests/test_web_fetch.c)
+    target_link_libraries(adam_web_fetch_test PRIVATE adam_core)
+    add_test(NAME web_fetch COMMAND adam_web_fetch_test)
+
+    find_package(Python3 COMPONENTS Interpreter QUIET)
+    if(Python3_Interpreter_FOUND)
+        add_executable(adam_web_loop_test tests/test_ollama_web_loop.c)
+        target_link_libraries(adam_web_loop_test PRIVATE adam_core)
+        add_test(NAME ollama_web_tool_loop
+                 COMMAND ${Python3_EXECUTABLE}
+                         ${CMAKE_CURRENT_SOURCE_DIR}/tests/mock_ollama.py
+                         $<TARGET_FILE:adam_web_loop_test>)
+    endif()
 endif()

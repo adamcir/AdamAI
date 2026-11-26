@@ -6,7 +6,7 @@
 #include <pthread.h>
 #include <stdatomic.h>
 
-typedef enum { ADAM_STREAM_THINKING, ADAM_STREAM_TEXT, ADAM_STREAM_ERROR, ADAM_STREAM_DONE } AdamStreamType;
+typedef enum { ADAM_STREAM_THINKING, ADAM_STREAM_TEXT, ADAM_STREAM_ERROR, ADAM_STREAM_TOOL, ADAM_STREAM_DONE } AdamStreamType;
 typedef struct AdamStreamEvent {
     AdamStreamType type;
     char *text;
@@ -21,11 +21,12 @@ typedef struct {
     char *payload;
     char *url;
     bool started;
+    bool web_enabled;
 } AdamStream;
 
 /* Starts one async Ollama /api/chat request; the UI thread owns this object. */
 bool adam_ollama_start(AdamStream *stream, const AdamChat *chat,
-                      const char *model, const char *endpoint, const char *think);
+                      const char *model, const char *endpoint, const char *think, bool web_enabled);
 /* Returns next event (caller frees text/event), or NULL when no event is available. */
 AdamStreamEvent *adam_ollama_poll(AdamStream *stream);
 void adam_ollama_stop(AdamStream *stream);

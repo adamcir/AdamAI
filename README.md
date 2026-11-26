@@ -47,6 +47,9 @@ Features:
 - **Persistent conversations:** auto-save to `~/adam-ai/chats/*.json`, restart recovery,
   chat picker (`Ctrl+K` / `/chats`), rename, manual save and confirmed deletion.
 - Asynchronous Ollama API client, cancellation, scrollback and status indicators.
+- **Opt-in web tool:** Ollama models supporting function calling can request
+  `web_fetch` to read public HTTPS pages. Use `/web on`, `/web off`,
+  or explicitly `/web https://example.com/` for a one-off visit.
 
 ### Linux dependencies
 
@@ -85,14 +88,16 @@ ADAM_MODEL=qwen3:8b ADAM_THINK=true ./build/AdamAI
 | `ADAM_OLLAMA_URL` | `http://127.0.0.1:11434` | Local Ollama endpoint |
 | `ADAM_THINK` | `medium` | `low`, `medium`, `high`, `true` or `off`, model-dependent |
 | `ADAM_TUI_THEME` | `dark` | `dark` or `light` |
+| `ADAM_WEB_ENABLED` | `0` | Set `1` for opt-in web access at startup |
 
 For key bindings, architecture and limitations see [docs/TUI.md](docs/TUI.md).
 
 ### Current limitations
 
-This preview contains **chat and terminal UI only**. Agent tool execution,
-filesystem operations and web browsing are not yet present. Chat histories are
-stored locally in your home directory (not sent to GitHub).
+This preview provides chat, saved sessions and the first **read-only web_fetch
+agent tool**, but not filesystem tools, shell execution or general web search.
+Chat histories remain local (not sent to GitHub). Internet requests can contact
+external servers when web mode is enabled or a one-off URL is provided.
 Do not confuse the application's local *workspace label* with filesystem access.
 
 ## License
@@ -118,3 +123,24 @@ after the prompt, periodically during streaming and when a response ends, is
 cancelled, or the program exits normally. A power loss can still lose the very
 last streamed characters. The initial empty chat is saved only once used or when
 `/save` is requested. No automatic cloud sync is performed.
+
+### Web access (first implementation)
+
+The internet tool is **off by default**. Type `/web on` and ask AdamAI to read
+a specific URL, or use `/web https://example.com/` for a single fetch without
+turning on automatic browsing. Type `/web off` to disable future requests.
+The active model must support Ollama function calls (tools).
+
+The web tool only reads text, HTML or JSON over verified **HTTPS** on port 443.
+It rejects private/reserved destination IPs (including after DNS resolution),
+does not follow redirects, uses no proxies or local credentials, and limits
+downloads to 512 KiB, extracted text to 12,000 bytes, and requests to 20 seconds.
+At most two tool-call rounds occur per AI response. JavaScript-driven sites,
+search queries, login-required pages, binary files and redirected URLs are not
+yet supported. Web content is untrusted and may contain errors or instructions;
+AdamAI forwards it as reference data, not as instructions to follow.
+
+A browsing action happens in a background Ollama request worker; `Ctrl+C`
+cancels it. Visited URLs are visible in the conversation, but fetched page
+bodies are not saved to chat history. External websites can see network requests
+and the URL you/model supplied.

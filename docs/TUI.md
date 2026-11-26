@@ -95,3 +95,26 @@ Saved chats survive a restart; the editable prompt history is process-local.
   streaming, on completion/cancellation and before switching or exiting.
 - Conversation list is limited to 128 most recent entries in this preview.
   Simultaneous AdamAI processes do not yet implement per-chat write locking.
+
+## Web agent tool (initial stage)
+
+- `src/tools/web_fetch.c`, `include/adam/web_fetch.h`: HTTPS GET with
+  URL validation, remote-IP checks before sending the request, TLS validation,
+  connection limits, cancellation and basic HTML-to-text conversion.
+- `src/backends/ollama.c`: registers the `web_fetch(url)` JSON tool when
+  enabled, reads tool calls in Ollama's streaming NDJSON response, executes them
+  on the existing worker thread, appends the `role:tool` result to the next
+  Ollama request and streams the final response back to ncurses.
+- `/web on` / `/web off`: toggle tool availability for subsequent model turns.
+  `/web HTTPS_URL`: one-shot explicit web fetch. `ADAM_WEB_ENABLED=1`
+  enables web tools at process launch. Off by default.
+- Protection against local network targets includes rejection of private and
+  loopback IPs even if a public DNS record resolves to one. No redirects, no
+  proxy, no local credentials, no POST, no filesystem access.
+- `tests/test_web_fetch.c` checks URL/IP protections and HTML extraction.
+  `tests/test_ollama_web_loop.c` with `tests/mock_ollama.py` checks the
+  full two-turn Ollama tool protocol without calling the public Internet.
+- Limitations: no search engine, browser JavaScript, cookies/login, following
+  redirects, or automatic verification of what a page claims. Model-generated
+  tool calls are limited to two rounds per user turn. Some model builds cannot
+  emit Ollama-compatible function calls; in that case use a supported model.
