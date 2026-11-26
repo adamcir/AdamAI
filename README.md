@@ -221,7 +221,7 @@ AdamAI's C17 tool registry exposes **32 tools** (run
   argument vector (no shell expansion), selected executable allowlist,
   30-second timeout, bounded output, a minimal environment, and child process
   limits. **Every executable command requires a separate Y/N approval**,
-  except explicit read-only Git inspection, formatting output and model list.
+  except explicit read-only Git inspection and the model list. Formatting also requires approval.
   This is **NOT a secure OS sandbox**: approved build scripts and compilers
   can execute arbitrary code with the current user's privileges. Only grant
   approval to code you trust.
