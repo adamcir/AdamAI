@@ -206,7 +206,7 @@ the local application, not through ChatGPT or GitHub.
 
 ## Developer agent tools (new)
 
-AdamAI's C17 tool registry exposes **23 local development tools** (run
+AdamAI's C17 tool registry exposes **32 tools** (run
 `/tools` in the TUI to see the categories):
 
 - **Files/code:** `find_files`, `search_files`, `find_symbol`,
@@ -234,6 +234,15 @@ Source: `include/adam/tool_registry.h` and `src/agent/tool_registry.c`.
 The existing Ollama backend registers the tool JSON schemas and routes calls
 through this shared module. FS permission must be on for developer tools.
 No arbitrary shell, sudo, unfenced background jobs, or automatic command approval.
+
+**Additional tools now included:** `memory_search`, `memory_update`
+(user-approved), `task_manager` (add, list and complete local tasks),
+`web_search` (experimental public HTML search; some search engines may block
+automated clients), `web_extract`, `http_request` (HTTPS GET only),
+`github_issues`, `github_pull_request` and `github_actions`
+(read-only public GitHub API). Network tools show the complete destination URL
+for explicit user approval whenever used from the developer agent. Notes and
+tasks are private files under `~/adam-ai/`.
 
 **Not implemented in this stage:** full LSP-based symbol resolution,
 persistent process sessions, first-class GitHub issue/PR mutations,

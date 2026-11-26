@@ -182,3 +182,17 @@ An approved build can still run arbitrary project code, access files outside
 the selected workspace and use the network. User confirmation is therefore
 required every time. For untrusted projects, run AdamAI in an actual container
 or an operating-system sandbox.
+
+## More agent tools
+
+The tool registry now includes local memory and task log management plus
+read-only public web/GitHub queries. `memory_update` and task mutations
+require explicit Y/N approval and write to private local JSONL files under
+`~/adam-ai/`. `memory_search` and task listing are read-only.
+
+`web_search` uses a public HTML search interface and is best-effort;
+providers may reject automated requests. `http_request` is deliberately
+restricted to public HTTPS GET; it does not support POST or account
+credentials. GitHub API tools fetch only public data. A separate Y/N
+confirmation must approve each URL when called through the developer
+agent while FS is available.

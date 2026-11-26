@@ -1052,13 +1052,16 @@ static void command(App *a, const char *input) {
     }
     if (!strcmp(input, "/tools")) {
         const char *description =
-            "Agent Tools: 23 commands available with FS enabled.\n"
+            "Agent Tools: 32 commands across FS, Web, Git and local memory.\n"
             "Files: find_files, search_files, find_symbol, find_references,\n"
             "project_index, inspect_dependencies, edit_file, apply_patch,\n"
             "create_directory, move_file, delete_file.\n"
             "Terminal: execute_command, build_project, run_tests, get_diagnostics,\n"
             "format_code. Git: git_status, git_diff, git_log, git_branch, git_commit.\n"
             "System: hardware_info, model_manager.\n"
+            "Web: web_search, web_extract, http_request, github_issues,\n"
+            "github_pull_request, github_actions (each request needs consent).\n"
+            "Memory: memory_search, memory_update, task_manager.\n"
             "Writes and shell-free command execution require approval.\n"
             "This is not a full command sandbox; review each proposed operation.";
         if (adam_chat_add(&a->chat,ADAM_ROLE_ASSISTANT,description)) {

@@ -16,11 +16,13 @@ typedef struct {
     AdamToolApproval approve;
     void *approval_userdata;
     bool allow_processes;
+    bool allow_network;
 } AdamToolContext;
 
 /* Schemas returned here are owned by caller and may be added to Ollama tools. */
 struct json_object *adam_tools_schemas(void);
 bool adam_tools_known(const char *name);
+bool adam_tools_is_network(const char *name);
 /* Returns true only on success. Caller frees output; failure explains why. */
 bool adam_tools_execute(const char *name, struct json_object *args,
                         AdamToolContext *ctx, char **output,

@@ -1,10 +1,14 @@
 /* AdamAI - GPL-3.0-only */
 #define _GNU_SOURCE
 #include "adam/tool_registry.h"
+#include "adam/web_fetch.h"
+#include <curl/curl.h>
+#include <json-c/json.h>
 #include <ctype.h>
 #include <dirent.h>
 #include <errno.h>
 #include <fcntl.h>
+#include <sys/file.h>
 #include <poll.h>
 #include <signal.h>
 #include <stdarg.h>
@@ -50,7 +54,17 @@ static const Spec specs[]={
  {"git_branch","List local git branches.","{\"type\":\"object\",\"properties\":{}}"},
  {"git_commit","Commit already-staged changes using a user-approved message.",PARAM1("message","Commit message")},
  {"hardware_info","Read OS, CPU and memory information from /proc. No secrets.","{\"type\":\"object\",\"properties\":{}}"},
- {"model_manager","List models through local Ollama CLI (read-only).","{\"type\":\"object\",\"properties\":{}}"}
+ {"model_manager","List models through local Ollama CLI (read-only).","{\"type\":\"object\",\"properties\":{}}"},
+ {"memory_search","Search user-approved local AdamAI notes in ~/adam-ai/memory.jsonl.",PARAM1("query","Text to search in stored notes")},
+ {"memory_update","Save a user-approved note to ~/adam-ai/memory.jsonl.",PARAM1("note","Useful long-term note to retain")},
+ {"task_manager","Add, finish or list tasks saved in ~/adam-ai/tasks.jsonl.","{\"type\":\"object\",\"required\":[\"action\"],\"properties\":{\"action\":{\"type\":\"string\",\"enum\":[\"add\",\"done\",\"list\"]},\"text\":{\"type\":\"string\"},\"id\":{\"type\":\"string\"}}}"},
+ {"web_search","Experimental text-only search engine query; may fail on anti-bot pages.",PARAM1("query","Internet search query")},
+ {"web_extract","Extract readable text from a public HTTPS page.",PARAM1("url","Public HTTPS URL")},
+ {"http_request","Read-only HTTP GET to a public HTTPS URL (no secrets or cookies).",PARAM1("url","Public HTTPS URL")},
+ {"github_issues","Read public GitHub repository issues using the public API.",PARAM1("repo","owner/repo")},
+ {"github_pull_request","Read public GitHub pull requests using the public API.",PARAM1("repo","owner/repo")},
+ {"github_actions","Read public GitHub Actions runs using the public API.",PARAM1("repo","owner/repo")}
+
 };
 
 static void fail(char *dst,size_t cap,const char *fmt,...) {
@@ -92,6 +106,12 @@ bool adam_tools_known(const char *name){
  if(!name)return false;
  for(size_t i=0;i<sizeof(specs)/sizeof(specs[0]);i++)if(!strcmp(specs[i].name,name))return true;
  return false;
+}
+bool adam_tools_is_network(const char *name){
+ if(!name)return false;
+ return !strcmp(name,"web_search") || !strcmp(name,"web_extract") ||
+        !strcmp(name,"http_request") || !strcmp(name,"github_issues") ||
+        !strcmp(name,"github_pull_request") || !strcmp(name,"github_actions");
 }
 static bool request(AdamToolContext *ctx,const char *description,char *error,size_t cap){
  if(!ctx->approve||!ctx->approve(description,ctx->approval_userdata)){
@@ -331,6 +351,219 @@ static bool hardware(char **out){
  return *out!=NULL;
 }
 
+/* User notes and simple task log stay on local disk, outside repositories.
+ * File permissions are private and mutations require approval. */
+static int private_store(const char *filename,bool create,char *error,size_t cap) {
+ const char *home=getenv("HOME");
+ if(!home||home[0]!='/'||strlen(home)>1000){fail(error,cap,"HOME not configured");return -1;}
+ char folder[1300];snprintf(folder,sizeof(folder),"%s/adam-ai",home);
+ if(create && mkdir(folder,0700)!=0 && errno!=EEXIST){fail(error,cap,"Cannot create notes folder");return -1;}
+ int d=open(folder,O_RDONLY|O_DIRECTORY|O_CLOEXEC|O_NOFOLLOW);
+ if(d<0){if(!create && errno==ENOENT)return -2;fail(error,cap,"Cannot open private AdamAI directory");return -1;}
+ struct stat st;if(fstat(d,&st)!=0||!S_ISDIR(st.st_mode)||st.st_uid!=getuid()){
+  close(d);fail(error,cap,"Unsafe owner for AdamAI note directory");return -1;
+ }
+ int flags=(create?O_RDWR|O_CREAT:O_RDONLY)|O_CLOEXEC|O_NOFOLLOW;
+ int fd=openat(d,filename,flags,0600);close(d);
+ if(fd<0){if(!create && errno==ENOENT)return -2;fail(error,cap,"Cannot open private note file");return -1;}
+ if(fstat(fd,&st)!=0||!S_ISREG(st.st_mode)||st.st_uid!=getuid()){
+  close(fd);fail(error,cap,"Unsafe ownership/type of notes file");return -1;
+ }
+ if(st.st_mode&0077){
+  if(!create||fchmod(fd,0600)!=0){close(fd);fail(error,cap,"Private notes file permissions are too open");return -1;}
+ }
+ return fd;
+}
+static bool append_event(int fd,struct json_object *event,char *error,size_t cap){
+ if(flock(fd,LOCK_EX)!=0){fail(error,cap,"Cannot lock note file");return false;}
+ struct stat st;
+ if(fstat(fd,&st)!=0||st.st_size>1024*1024){flock(fd,LOCK_UN);fail(error,cap,"Private data store full");return false;}
+ const char *text=json_object_to_json_string_ext(event,JSON_C_TO_STRING_PLAIN);
+ size_t n=text?strlen(text):0;
+ if(!n||lseek(fd,0,SEEK_END)<0){flock(fd,LOCK_UN);return false;}
+ bool ok=true;
+ if(write(fd,text,n)!=(ssize_t)n||write(fd,"\n",1)!=1||fsync(fd)!=0)ok=false;
+ flock(fd,LOCK_UN);
+ if(!ok)fail(error,cap,"Failed to save local note");
+ return ok;
+}
+static char *read_store(int fd){
+ struct stat st;if(fstat(fd,&st)!=0||st.st_size<0||st.st_size>1024*1024)return NULL;
+ char *buf=calloc((size_t)st.st_size+1,1);
+ if(!buf)return NULL;
+ size_t used=0;
+ while(used<(size_t)st.st_size){ssize_t n=pread(fd,buf+used,(size_t)st.st_size-used,(off_t)used);
+  if(n<0&&errno==EINTR)continue;
+  if(n<=0)break;
+  used+=(size_t)n;
+ }
+ buf[used]=0;return buf;
+}
+static bool memory_op(AdamToolContext *ctx,const char *name,struct json_object *args,
+                      char **output,char *error,size_t cap){
+ bool writing=!strcmp(name,"memory_update");
+ const char *value=arg_string(args,writing?"note":"query");
+ if(!value||!*value||strlen(value)>1024){fail(error,cap,"Note/query must be 1..1024 bytes");return false;}
+ if(writing){
+  char preview[1400];snprintf(preview,sizeof(preview),
+    "LONG-TERM MEMORY APPROVAL REQUIRED\nAdamAI wants to remember:\n%s\nPress Y to save the note.",value);
+  if(!request(ctx,preview,error,cap))return false;
+ }
+ int fd=private_store("memory.jsonl",writing,error,cap);
+ if(fd==-2){*output=duplicate("No saved memories");return *output!=NULL;}
+ if(fd<0)return false;
+ if(writing){
+  struct json_object *obj=json_object_new_object();
+  json_object_object_add(obj,"note",json_object_new_string(value));
+  bool ok=append_event(fd,obj,error,cap);json_object_put(obj);close(fd);
+  if(ok)*output=duplicate("Approved note saved in local AdamAI memory");
+  return ok&&*output;
+ }
+ char *data=read_store(fd);close(fd);
+ if(!data){fail(error,cap,"Could not read notes");return false;}
+ size_t len=0;int hits=0;char *cursor=NULL;
+ for(char *line=strtok_r(data,"\n",&cursor);line&&hits<24;line=strtok_r(NULL,"\n",&cursor)){
+  struct json_object *obj=json_tokener_parse(line),*v=NULL;
+  if(obj&&json_object_object_get_ex(obj,"note",&v)&&json_object_is_type(v,json_type_string)){
+   const char *note=json_object_get_string(v);
+   if(strcasestr(note,value)){appendf(output,&len,10000,"- %.1000s\n",note);hits++;}
+  }
+  if(obj)json_object_put(obj);
+ }
+ free(data);
+ if(!*output)*output=duplicate("No matching memories");
+ return *output!=NULL;
+}
+typedef struct{char id[64],text[1024];bool done;} SavedTask;
+static bool task_op(AdamToolContext *ctx,struct json_object *args,
+                    char **output,char *error,size_t cap){
+ const char *action=arg_string(args,"action");
+ if(!action|| (strcmp(action,"list")&&strcmp(action,"add")&&strcmp(action,"done"))){
+  fail(error,cap,"task_manager action must be add, done, list");return false;
+ }
+ const char *text=arg_string(args,"text"),*id=arg_string(args,"id");
+ bool writing=strcmp(action,"list")!=0;
+ if(writing){
+  if(!strcmp(action,"add")&&(!text||!*text||strlen(text)>=1024)){
+   fail(error,cap,"Task text must be 1..1023 bytes");return false;
+  }
+  if(!strcmp(action,"done")&&(!id||!id[0]||strlen(id)>63)){
+   fail(error,cap,"Task ID required");return false;
+  }
+  char preview[1400];snprintf(preview,sizeof(preview),
+    "TASK CHANGE APPROVAL REQUIRED\nAction: %s\nTask: %.1000s\n"
+    "ID: %.60s\nPress Y to approve task update.",action,text?text:"",id?id:"");
+  if(!request(ctx,preview,error,cap))return false;
+ }
+ int fd=private_store("tasks.jsonl",writing,error,cap);
+ if(fd==-2){*output=duplicate("No tasks saved");return *output!=NULL;}
+ if(fd<0)return false;
+ if(writing){
+  struct json_object *e=json_object_new_object();
+  json_object_object_add(e,"action",json_object_new_string(action));
+  char generated[64];
+  if(!strcmp(action,"add")){
+   struct timespec now;clock_gettime(CLOCK_REALTIME,&now);
+   snprintf(generated,sizeof(generated),"%ld-%09ld-%ld",(long)now.tv_sec,now.tv_nsec,(long)getpid());
+   json_object_object_add(e,"id",json_object_new_string(generated));
+   json_object_object_add(e,"text",json_object_new_string(text));
+  } else json_object_object_add(e,"id",json_object_new_string(id));
+  bool ok=append_event(fd,e,error,cap);json_object_put(e);close(fd);
+  if(ok){char msg[120];snprintf(msg,sizeof(msg),"Task updated. ID: %s",!strcmp(action,"add")?generated:id);
+   *output=duplicate(msg);}
+  return ok&&*output;
+ }
+ char *data=read_store(fd);close(fd);
+ if(!data){fail(error,cap,"Could not read tasks");return false;}
+ SavedTask tasks[256]={0};size_t count=0;
+ char *cursor=NULL;
+ for(char *line=strtok_r(data,"\n",&cursor);line;line=strtok_r(NULL,"\n",&cursor)){
+  struct json_object *obj=json_tokener_parse(line);
+  if(!obj)continue;
+  struct json_object *a=NULL,*tid=NULL,*t=NULL;
+  const char *act=json_object_object_get_ex(obj,"action",&a)?json_object_get_string(a):NULL;
+  const char *taskid=json_object_object_get_ex(obj,"id",&tid)?json_object_get_string(tid):NULL;
+  const char *body=json_object_object_get_ex(obj,"text",&t)?json_object_get_string(t):NULL;
+  if(act&&taskid){
+   if(!strcmp(act,"add")&&body&&count<256){
+    snprintf(tasks[count].id,sizeof(tasks[count].id),"%s",taskid);
+    snprintf(tasks[count].text,sizeof(tasks[count].text),"%s",body);count++;
+   } else if(!strcmp(act,"done"))for(size_t i=0;i<count;i++)if(!strcmp(tasks[i].id,taskid))tasks[i].done=true;
+  }
+  json_object_put(obj);
+ }
+ free(data);
+ size_t len=0;for(size_t i=0;i<count;i++){
+  if(!appendf(output,&len,10000,"[%c] %s: %.400s\n",tasks[i].done?'x':' ',tasks[i].id,tasks[i].text))break;
+ }
+ if(!*output)*output=duplicate("No tasks saved");
+ return *output!=NULL;
+}
+
+/* Read-only public network helpers. Every full URL is shown to the user
+ * before sending when filesystem access is active. */
+static bool fetch_public(AdamToolContext *ctx,const char *url,
+                         char **output,char *error,size_t cap){
+ if(!ctx->allow_network){fail(error,cap,"Web access disabled");return false;}
+ if(!adam_web_validate_url(url,error,cap))return false;
+ size_t n=strlen(url)+512;char *prompt=malloc(n);
+ if(!prompt){fail(error,cap,"Out of memory");return false;}
+ snprintf(prompt,n,"OUTBOUND WEB REQUEST APPROVAL REQUIRED\nDestination URL:\n%s\n"
+         "Inspect FULL URL for personal or project data before allowing.\n"
+         "Press Y to make this public HTTPS request.",url);
+ bool yes=request(ctx,prompt,error,cap);free(prompt);
+ if(!yes)return false;
+ AdamWebPage page={0};
+ bool ok=adam_web_fetch(url,ctx->cancelled,&page,error,cap);
+ if(ok){
+  size_t need=strlen(url)+strlen(page.text)+256;
+  *output=malloc(need);
+  if(*output)snprintf(*output,need,"Source URL: %s\nUntrusted public web content:\n%s%s",
+                       url,page.text,page.truncated?"\n[truncated]":"");
+  else ok=false;
+ }
+ adam_web_page_free(&page);
+ return ok&&*output;
+}
+static bool good_repo(const char *repo){
+ if(!repo||strlen(repo)>150)return false;
+ const char *slash=strchr(repo,'/');
+ if(!slash||slash==repo||slash[1]==0||strchr(slash+1,'/'))return false;
+ for(const char *p=repo;*p;p++){
+  unsigned char c=(unsigned char)*p;
+  if(!(isalnum(c)||c=='.'||c=='_'||c=='-'||c=='/'))return false;
+ }
+ return true;
+}
+static bool network_op(AdamToolContext *ctx,const char *name,struct json_object *args,
+                       char **output,char *error,size_t cap){
+ const char *url=arg_string(args,"url");
+ if(!strcmp(name,"web_extract")||!strcmp(name,"http_request")){
+  if(!url){fail(error,cap,"Missing HTTPS URL");return false;}
+  return fetch_public(ctx,url,output,error,cap);
+ }
+ if(!strcmp(name,"web_search")){
+  const char *q=arg_string(args,"query");
+  if(!q||!*q||strlen(q)>240){fail(error,cap,"Query must be 1..240 bytes");return false;}
+  CURL *curl=curl_easy_init();if(!curl){fail(error,cap,"libcurl unavailable");return false;}
+  char *encoded=curl_easy_escape(curl,q,0);
+  if(!encoded){curl_easy_cleanup(curl);return false;}
+  size_t size=strlen(encoded)+100;char *dest=malloc(size);
+  if(dest)snprintf(dest,size,"https://html.duckduckgo.com/html/?q=%s",encoded);
+  curl_free(encoded);curl_easy_cleanup(curl);
+  if(!dest)return false;
+  bool ok=fetch_public(ctx,dest,output,error,cap);free(dest);
+  return ok;
+ }
+ const char *repo=arg_string(args,"repo");
+ if(!good_repo(repo)){fail(error,cap,"Repository must be owner/repo");return false;}
+ const char *end=!strcmp(name,"github_issues")?"issues?state=open&per_page=10":
+                 !strcmp(name,"github_pull_request")?"pulls?state=open&per_page=10":
+                 "actions/runs?per_page=5";
+ char addr[512];snprintf(addr,sizeof(addr),"https://api.github.com/repos/%s/%s",repo,end);
+ return fetch_public(ctx,addr,output,error,cap);
+}
+
 bool adam_tools_execute(const char *name,struct json_object *args,AdamToolContext *ctx,
                         char **output,char *error,size_t cap){
  if(output)*output=NULL;
@@ -413,5 +646,13 @@ bool adam_tools_execute(const char *name,struct json_object *args,AdamToolContex
   const char *argv[]={"clang-format","--style=file",path,NULL};
   return approved_run(ctx,argv,false,output,error,cap);
  }
+ if(!strcmp(name,"memory_search")||!strcmp(name,"memory_update"))
+  return memory_op(ctx,name,args,output,error,cap);
+ if(!strcmp(name,"task_manager"))
+  return task_op(ctx,args,output,error,cap);
+ if(!strcmp(name,"web_search")||!strcmp(name,"web_extract")||
+    !strcmp(name,"http_request")||!strcmp(name,"github_issues")||
+    !strcmp(name,"github_pull_request")||!strcmp(name,"github_actions"))
+  return network_op(ctx,name,args,output,error,cap);
  fail(error,cap,"Unknown tool: %s",name);return false;
 }
