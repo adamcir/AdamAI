@@ -60,3 +60,12 @@ It does not run shell commands, mutate files or save sessions to disk.
 Markdown is intentionally basic and not a full CommonMark parser.
 The editor displays up to five rows; overflowing messages scroll to follow the cursor.
 Sessions and prompt history exist only during the current process lifetime.
+
+## Word-aware composer layout
+
+- `include/adam/editor_layout.h` and `src/ui/editor_layout.c` compute **one shared** row/terminal-cell map for the editor and its insertion caret.
+- Soft wraps occur at word boundaries when possible; a word longer than the available width is split only as a last resort.
+- Whitespace suppressed at a visual line break remains unchanged in the original message sent to the model.
+- Explicit newlines are respected. Unicode glyph widths are calculated with `wcwidth` in the active UTF-8 locale.
+- The editor remains compact until additional rows are needed (up to 5 visible rows) and keeps the cursor in view when editing longer prompts.
+- `tests/test_editor_layout.c` covers the reported Czech `Lorem Ipsum` wrapping regression, exact boundaries, explicit newlines and full-width Unicode.
