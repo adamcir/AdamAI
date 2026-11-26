@@ -1,0 +1,12 @@
+/build/
+/cmake-build-*/
+*.o
+*.so
+*.a
+*.swp
+.cache/
+*.gguf
+*.safetensors
+*.sqlite
+*.sqlite3
+.env
