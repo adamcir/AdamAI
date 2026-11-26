@@ -40,6 +40,20 @@ int main(void){
  run(&ctx,"delete_file","{\"path\":\"subdir/moved.c\"}",true,"completed");
  run(&ctx,"create_directory","{\"path\":\"../outside\"}",false,NULL);
  run(&ctx,"hardware_info","{}",true,"AdamAI hardware");
+ if(geteuid()!=0){
+     ctx.allow_processes=true;
+     run(&ctx,"execute_command",
+         "{\"argv\":[\"echo\",\"adamai-terminal-test\"]}",
+         true,"adamai-terminal-test");
+     ctx.approve=approve_no;
+     run(&ctx,"execute_command",
+         "{\"argv\":[\"echo\",\"must-not-run\"]}",
+         false,NULL);
+     ctx.approve=approve_yes;
+     run(&ctx,"execute_command",
+         "{\"argv\":[\"sh\",\"-c\",\"echo unsafe\"]}",
+         false,NULL);
+ }
  ctx.approve=approve_no;
  run(&ctx,"memory_update","{\"note\":\"Remember C17 coding style\"}",false,NULL);
  ctx.approve=approve_yes;
