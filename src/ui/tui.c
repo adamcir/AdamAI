@@ -1046,6 +1046,11 @@ static void submit(App *a) {
     /* /web HTTPS_URL is a one-shot explicit permission to read that URL,
      * even if automatic model web access is currently off. */
     bool direct_web = !strncmp(text, "/web https://", 13);
+    if (direct_web && a->fs_enabled) {
+        set_status(a, "Disable FS (/fs off) before using /web URL");
+        free(text);
+        return;
+    }
     if (direct_web) {
         char error[200] = "";
         const char *url = text + 5;
