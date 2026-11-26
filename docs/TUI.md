@@ -165,3 +165,20 @@ Saved chats survive a restart; the editable prompt history is process-local.
   `getcwd()`. Changes to the project do not erase or change saved chats.
 - This program does not execute shell commands or silently access arbitrary
   directories; only explicitly approved workspace directories are used.
+
+## C17 developer tool registry
+
+`src/agent/tool_registry.c` provides a separate JSON schema and dispatcher
+for 23 source, terminal, Git and system tools. `ollama.c` no longer needs
+individual branches for new developer tools. Mutating file operations and
+process execution use the preexisting modal approval callback. All paths
+remain workspace-relative and do not follow symlinks for file operations.
+
+`execute_command` accepts a JSON array `argv` (never shell text). It
+executes only known executable names, strips inherited environment variables,
+applies process resource limits, captures bounded stdout/stderr and the exit
+code, and cancels process groups on timeout. **This is not a secure sandbox.**
+An approved build can still run arbitrary project code, access files outside
+the selected workspace and use the network. User confirmation is therefore
+required every time. For untrusted projects, run AdamAI in an actual container
+or an operating-system sandbox.

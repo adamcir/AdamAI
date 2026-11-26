@@ -177,7 +177,7 @@ bool adam_fs_list(AdamFs *fs, const char *path, char **output,
     *output=NULL;
     if (!path || !*path) path=".";
     int fd=-1;
-    if (!strcmp(path,".")) fd=dup(fs->root_fd);
+    if (!strcmp(path,".")) fd=openat(fs->root_fd,".",O_RDONLY|O_CLOEXEC|O_DIRECTORY|O_NOFOLLOW);
     else {
         char name[256]; int parent=parent_fd(fs,path,name,error,cap);
         if (parent<0)return false;
@@ -191,6 +191,8 @@ bool adam_fs_list(AdamFs *fs, const char *path, char **output,
     struct dirent *entry;
     while ((entry=readdir(dir))) {
         if (!strcmp(entry->d_name,".")||!strcmp(entry->d_name,".."))continue;
+        /* Never reveal restricted names to the model. */
+        if (!adam_fs_valid_path(entry->d_name,false))continue;
         if (count>=ADAM_FS_LIST_LIMIT) {more=true;break;}
         struct stat st;
         char kind='?';

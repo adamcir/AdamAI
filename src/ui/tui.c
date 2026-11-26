@@ -68,6 +68,7 @@ static const Command commands[] = {
     {"/web", "Web access: on/off, or /web HTTPS_URL", true},
     {"/fs", "Workspace files: on/off (writes require approval)", true},
     {"/workspace", "Change project folder with Y/N permission", true},
+    {"/tools", "List developer-agent capabilities", false},
     {"/thinking", "Toggle reasoning display", false},
     {"/sidebar", "Toggle workspace sidebar", false},
     {"/theme", "Switch dark / light appearance", false},
@@ -514,6 +515,7 @@ static void draw_help(int x, int width, int top, int available) {
         "Ctrl+P        Open slash-command palette",
         "Web           /web on/off or /web HTTPS_URL",
         "Files         /fs on/off  (write requires Y)",
+        "Agent         /tools lists coding and Git capabilities",
         "Ctrl+W        Request change of project folder",
         "Ctrl+K        Browse saved chats",
         "Ctrl+B        Show / hide workspace sidebar",
@@ -1046,6 +1048,24 @@ static void command(App *a, const char *input) {
     }
     if (!strncmp(input,"/workspace ",11) && input[11]) {
         request_local_workspace(a,input+11);
+        return;
+    }
+    if (!strcmp(input, "/tools")) {
+        const char *description =
+            "Agent Tools: 23 commands available with FS enabled.\n"
+            "Files: find_files, search_files, find_symbol, find_references,\n"
+            "project_index, inspect_dependencies, edit_file, apply_patch,\n"
+            "create_directory, move_file, delete_file.\n"
+            "Terminal: execute_command, build_project, run_tests, get_diagnostics,\n"
+            "format_code. Git: git_status, git_diff, git_log, git_branch, git_commit.\n"
+            "System: hardware_info, model_manager.\n"
+            "Writes and shell-free command execution require approval.\n"
+            "This is not a full command sandbox; review each proposed operation.";
+        if (adam_chat_add(&a->chat,ADAM_ROLE_ASSISTANT,description)) {
+            a->dirty=true;
+            (void)save_current_chat(a);
+        }
+        set_status(a,"Agent tool capabilities");
         return;
     }
     if (!strcmp(input, "/thinking")) {

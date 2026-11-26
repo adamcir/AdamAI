@@ -17,6 +17,7 @@ add_library(adam_core STATIC
     src/core/chat_store.c
     src/tools/web_fetch.c
     src/tools/fs_tool.c
+    src/agent/tool_registry.c
     src/backends/ollama.c
 )
 target_include_directories(adam_core PUBLIC include)
@@ -51,6 +52,10 @@ if(BUILD_TESTING)
     add_executable(adam_chat_store_test tests/test_chat_store.c)
     target_link_libraries(adam_chat_store_test PRIVATE adam_core)
     add_test(NAME chat_store COMMAND adam_chat_store_test)
+
+    add_executable(adam_agent_tools_test tests/test_agent_tools.c)
+    target_link_libraries(adam_agent_tools_test PRIVATE adam_core)
+    add_test(NAME agent_tools COMMAND adam_agent_tools_test)
 
     add_executable(adam_fs_tool_test tests/test_fs_tool.c)
     target_link_libraries(adam_fs_tool_test PRIVATE adam_core)

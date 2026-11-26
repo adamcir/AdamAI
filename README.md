@@ -203,3 +203,41 @@ The initial workspace is the process working directory, unless
 model requests (and updates the workspace header/sidebar) without changing the
 application process working directory. Filesystem access happens on your own PC through
 the local application, not through ChatGPT or GitHub.
+
+## Developer agent tools (new)
+
+AdamAI's C17 tool registry exposes **23 local development tools** (run
+`/tools` in the TUI to see the categories):
+
+- **Files/code:** `find_files`, `search_files`, `find_symbol`,
+  `find_references`, `project_index`, `inspect_dependencies`,
+  `edit_file`, `apply_patch`, `create_directory`, `move_file`,
+  `delete_file`. Search is bounded (depth 4, up to 512 entries, 64 matches);
+  source symbols are literal string searches rather than a full LSP.
+  `apply_patch` uses exact `old_text`/`new_text` replacement, **not**
+  unified-diff patch parsing.
+- **Terminal and builds:** `execute_command`, `build_project`,
+  `run_tests`, `get_diagnostics`, `format_code`. Commands use an
+  argument vector (no shell expansion), selected executable allowlist,
+  30-second timeout, bounded output, a minimal environment, and child process
+  limits. **Every executable command requires a separate Y/N approval**,
+  except explicit read-only Git inspection, formatting output and model list.
+  This is **NOT a secure OS sandbox**: approved build scripts and compilers
+  can execute arbitrary code with the current user's privileges. Only grant
+  approval to code you trust.
+- **Git/system:** `git_status`, `git_diff`, `git_log`, `git_branch`,
+  `git_commit`, `hardware_info`, `model_manager`. `git_commit`
+  commits only already-staged changes after approval.
+  `format_code` prints formatting rather than writing to disk.
+
+Source: `include/adam/tool_registry.h` and `src/agent/tool_registry.c`.
+The existing Ollama backend registers the tool JSON schemas and routes calls
+through this shared module. FS permission must be on for developer tools.
+No arbitrary shell, sudo, unfenced background jobs, or automatic command approval.
+
+**Not implemented in this stage:** full LSP-based symbol resolution,
+persistent process sessions, first-class GitHub issue/PR mutations,
+JavaScript browser control, configurable authenticated API calls, downloads,
+long-term memory and task indexing, model training/manipulation, and full
+filesystem sandboxing. These require additional provider/backend integration,
+credential handling or stronger isolation.
