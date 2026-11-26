@@ -67,6 +67,7 @@ static const Command commands[] = {
     {"/model", "Choose an Ollama model", true},
     {"/web", "Web access: on/off, or /web HTTPS_URL", true},
     {"/fs", "Workspace files: on/off (writes require approval)", true},
+    {"/workspace", "Change project folder with Y/N permission", true},
     {"/thinking", "Toggle reasoning display", false},
     {"/sidebar", "Toggle workspace sidebar", false},
     {"/theme", "Switch dark / light appearance", false},
@@ -100,7 +101,9 @@ typedef struct {
     char chat_directory[PATH_MAX];
     bool store_ready, dirty, chats_open, confirm_delete;
     bool web_enabled, fs_enabled, approval_open;
+    bool local_workspace_pending;
     char fs_workspace[PATH_MAX];
+    char pending_workspace[PATH_MAX];
     char *approval_details;
     int approval_scroll;
     time_t last_save;
@@ -379,14 +382,16 @@ static void set_theme(bool light) {
     }
 }
 
-static void cwd_short(char *out, size_t size) {
-    char cwd[PATH_MAX];
-    if (!getcwd(cwd, sizeof(cwd))) { snprintf(out, size, "unknown workspace"); return; }
-    const char *home = getenv("HOME");
-    if (home && *home && strncmp(cwd, home, strlen(home)) == 0 &&
-        (cwd[strlen(home)] == '/' || !cwd[strlen(home)]))
-        snprintf(out, size, "~%s", cwd + strlen(home));
-    else snprintf(out, size, "%s", cwd);
+static void cwd_short(const char *workspace, char *out, size_t size) {
+    if (!workspace || !*workspace) {
+        snprintf(out,size,"unknown workspace");
+        return;
+    }
+    const char *home=getenv("HOME");
+    if(home && *home && strncmp(workspace,home,strlen(home))==0 &&
+       (workspace[strlen(home)]=='/' || !workspace[strlen(home)]))
+        snprintf(out,size,"~%s",workspace+strlen(home));
+    else snprintf(out,size,"%s",workspace);
 }
 
 static void draw_sidebar(const App *a, int left, int top, int height) {
@@ -398,7 +403,7 @@ static void draw_sidebar(const App *a, int left, int top, int height) {
     attrs(C_NORMAL, false);
     line_at(top, inner, width, "PROJECT", C_ACCENT, true);
     char cwd[PATH_MAX];
-    cwd_short(cwd, sizeof(cwd));
+    cwd_short(a->fs_workspace, cwd, sizeof(cwd));
     const char *project = strrchr(cwd, '/');
     line_at(top + 2, inner, width, project && project[1] ? project + 1 : cwd,
             C_NORMAL, true);
@@ -427,6 +432,8 @@ static void draw_sidebar(const App *a, int left, int top, int height) {
         line_at(top + height - 5, inner, width, "Ctrl+K  chats", C_MUTED, false);
         line_at(top + height - 4, inner, width, "Ctrl+T  thinking", C_MUTED, false);
         line_at(top + height - 3, inner, width, "Ctrl+B  sidebar", C_MUTED, false);
+        if (height > 28)
+            line_at(top + height - 6, inner, width, "Ctrl+W  workspace", C_WARNING, false);
     }
 }
 
@@ -506,6 +513,7 @@ static void draw_help(int x, int width, int top, int available) {
         "Ctrl+P        Open slash-command palette",
         "Web           /web on/off or /web HTTPS_URL",
         "Files         /fs on/off  (write requires Y)",
+        "Ctrl+W        Request change of project folder",
         "Ctrl+K        Browse saved chats",
         "Ctrl+B        Show / hide workspace sidebar",
         "Ctrl+T        Expand / collapse reasoning",
@@ -582,7 +590,7 @@ static void draw_fs_approval(App *a, int x, int top, int width, int height) {
     int left = x + (width - w)/2;
     int y = top + (height - h)/2;
     frame(y,left,h,w,C_WARNING,C_PANEL);
-    line_at(y+1,left+3,w-6,"WRITE FILE  ·  USER APPROVAL REQUIRED",C_WARNING,true);
+    line_at(y+1,left+3,w-6,"APPROVAL REQUIRED  ·  Y / N",C_WARNING,true);
     View preview={0};
     view_wrap_code(&preview,a->approval_details,w-7,C_PANEL,0,false);
     int rows=h-6;
@@ -682,7 +690,7 @@ static void draw(App *a) {
     if (n < content_right - 23)
         line_at(0, content_right - n - 2, n, right, a->busy ? C_WARNING : C_GOOD, false);
     char cwd[PATH_MAX + 32];
-    cwd_short(cwd, sizeof(cwd));
+    cwd_short(a->fs_workspace, cwd, sizeof(cwd));
     char work[PATH_MAX + 64];
     snprintf(work, sizeof(work), "WORKSPACE  /  %.200s", cwd);
     line_at(1, cx, cw, work, C_MUTED, false);
@@ -911,6 +919,50 @@ static void show_help_message(App *a) {
     set_status(a, a->help_open ? "Shortcuts (Esc to close)" : "Ready");
 }
 
+/* Switching the authorized project directory is a privileged local action:
+ * never change the root without the explicit Y key in this dialog. */
+static void request_local_workspace(App *a, const char *path) {
+    if (a->busy) {
+        set_status(a,"Finish or cancel generation before switching workspace");
+        return;
+    }
+    if (!path || path[0]!='/') {
+        set_status(a,"Use an absolute existing path: /workspace /path/to/project");
+        return;
+    }
+    AdamFs candidate;
+    char error[220]="";
+    if (!adam_fs_init(&candidate,path,error,sizeof(error))) {
+        set_status(a,error[0]?error:"Cannot open directory");
+        return;
+    }
+    if (!strcmp(candidate.root,a->fs_workspace)) {
+        adam_fs_close(&candidate);
+        set_status(a,"Workspace is already selected");
+        return;
+    }
+    snprintf(a->pending_workspace,sizeof(a->pending_workspace),"%s",candidate.root);
+    adam_fs_close(&candidate);
+    size_t cap=strlen(a->pending_workspace)+strlen(a->fs_workspace)+440;
+    char *preview=malloc(cap);
+    if(!preview) {set_status(a,"Out of memory");return;}
+    snprintf(preview,cap,
+             "WORKSPACE CHANGE APPROVAL REQUIRED\n"
+             "Current workspace: %s\n"
+             "Requested new workspace: %s\n"
+             "AdamAI will be able to read files inside the new folder.\n"
+             "Writes will still need confirmation.\n"
+             "Web requests also require approval while FS is enabled.\n"
+             "Press Y to grant access, or N/Esc to keep the old workspace.",
+             a->fs_workspace,a->pending_workspace);
+    free(a->approval_details);
+    a->approval_details=preview;
+    a->local_workspace_pending=true;
+    a->approval_scroll=0;
+    a->approval_open=true;
+    set_status(a,"Confirm workspace change with Y/N");
+}
+
 static void command(App *a, const char *input) {
     if (!strcmp(input, "/quit") || !strcmp(input, "/exit")) { a->running = false; return; }
     if (!strcmp(input, "/new") || !strcmp(input, "/clear")) { new_chat(a); return; }
@@ -956,12 +1008,8 @@ static void command(App *a, const char *input) {
         return;
     }
     if (!strcmp(input, "/web on")) {
-        if (a->fs_enabled) {
-            set_status(a, "Disable FS (/fs off) before enabling web");
-            return;
-        }
         a->web_enabled = true;
-        set_status(a, "Web tool enabled for this session");
+        set_status(a,"Web enabled; when FS is also on, each URL needs Y/N approval");
         return;
     }
     if (!strcmp(input, "/web off")) {
@@ -977,18 +1025,23 @@ static void command(App *a, const char *input) {
         return;
     }
     if (!strcmp(input, "/fs on")) {
-        if (a->web_enabled) {
-            set_status(a,"Disable web (/web off) before enabling FS");
-            return;
-        }
-        if (!a->fs_workspace[0]) { set_status(a,"Workspace unavailable"); return; }
+        if (!a->fs_workspace[0]) {set_status(a,"Workspace unavailable");return;}
         a->fs_enabled=true;
-        set_status(a,"FS enabled: project-relative reads; writes require Y approval");
+        set_status(a,"FS enabled; writes and outbound web requests need Y/N");
         return;
     }
     if (!strcmp(input, "/fs off")) {
         a->fs_enabled=false;
         set_status(a,"FS tool disabled for future requests");
+        return;
+    }
+    if (!strcmp(input,"/workspace")) {
+        input_set(a,L"/workspace ");
+        set_status(a,"Enter an absolute directory to request access to");
+        return;
+    }
+    if (!strncmp(input,"/workspace ",11) && input[11]) {
+        request_local_workspace(a,input+11);
         return;
     }
     if (!strcmp(input, "/thinking")) {
@@ -1046,11 +1099,6 @@ static void submit(App *a) {
     /* /web HTTPS_URL is a one-shot explicit permission to read that URL,
      * even if automatic model web access is currently off. */
     bool direct_web = !strncmp(text, "/web https://", 13);
-    if (direct_web && a->fs_enabled) {
-        set_status(a, "Disable FS (/fs off) before using /web URL");
-        free(text);
-        return;
-    }
     if (direct_web) {
         char error[200] = "";
         const char *url = text + 5;
@@ -1087,7 +1135,7 @@ static void submit(App *a) {
     (void)save_current_chat(a); /* Save the prompt BEFORE starting inference. */
     if (!adam_ollama_start(&a->stream, &a->chat, a->model, a->endpoint,
                            a->think_level, a->web_enabled || direct_web,
-                           a->fs_enabled && !direct_web, a->fs_workspace)) {
+                           a->fs_enabled, a->fs_workspace)) {
         adam_text_append(&a->chat.items[a->chat.count - 1].content, "Could not launch model request.");
         a->dirty = true;
         (void)save_current_chat(a);
@@ -1130,7 +1178,14 @@ static void process_stream(App *a) {
                 a->approval_details = strdup(event->text ? event->text : "");
                 a->approval_scroll = 0;
                 a->approval_open = a->approval_details != NULL;
-                set_status(a,"Write approval: Y confirm, N/Esc reject, PgUp/PgDn review");
+                a->local_workspace_pending=false;
+                set_status(a,"Tool approval: Y confirm, N/Esc reject, PgUp/PgDn review");
+                break;
+            case ADAM_STREAM_WORKSPACE:
+                if (event->text && strlen(event->text)<sizeof(a->fs_workspace)) {
+                    snprintf(a->fs_workspace,sizeof(a->fs_workspace),"%s",event->text);
+                    set_status(a,"New workspace approved by user");
+                }
                 break;
             case ADAM_STREAM_ERROR:
                 if (m->content && *m->content) adam_text_append(&m->content, "\n");
@@ -1220,14 +1275,34 @@ static void input_key(App *a, wint_t key, bool special) {
         } else if (key==L'y' || key==L'Y' || key==L'n' || key==L'N' ||
                    key==27) {
             bool yes=key==L'y'||key==L'Y';
-            (void)adam_ollama_answer_approval(&a->stream,yes);
+            if(a->local_workspace_pending) {
+                if(yes) {
+                    AdamFs candidate;
+                    char error[220]="";
+                    if(adam_fs_init(&candidate,a->pending_workspace,error,sizeof(error))) {
+                        snprintf(a->fs_workspace,sizeof(a->fs_workspace),"%s",candidate.root);
+                        adam_fs_close(&candidate);
+                        set_status(a,"Workspace change approved");
+                    } else set_status(a,error[0]?error:"Workspace no longer available");
+                } else set_status(a,"Workspace change denied");
+            } else {
+                (void)adam_ollama_answer_approval(&a->stream,yes);
+                set_status(a,yes?"Tool approved; waiting for result":
+                                "Tool rejected; model informed");
+            }
             a->approval_open=false;
+            a->local_workspace_pending=false;
+            a->pending_workspace[0]='\0';
             free(a->approval_details);
             a->approval_details=NULL;
-            set_status(a,yes?"Write approved; waiting for result":
-                            "Write rejected; model informed");
         } else if(key==3) {
-            cancel_stream(a);
+            if(a->local_workspace_pending) {
+                a->approval_open=false;
+                a->local_workspace_pending=false;
+                free(a->approval_details);
+                a->approval_details=NULL;
+                set_status(a,"Workspace change denied");
+            } else cancel_stream(a);
         }
         return;
     }
@@ -1340,6 +1415,10 @@ static void input_key(App *a, wint_t key, bool special) {
             break;
         case 12: new_chat(a); break; /* Ctrl+L */
         case 11: browse_chats(a); break; /* Ctrl+K */
+        case 23: /* Ctrl+W: request another project folder. */
+            if (a->busy) set_status(a,"Cancel generation before switching workspace");
+            else {input_set(a,L"/workspace ");set_status(a,"Enter absolute project directory");}
+            break;
         case 15: insert_char(a, L'\n'); break; /* Ctrl+O */
         case 21: input_set(a, L""); break; /* Ctrl+U */
         case 1: a->cursor = 0; break;
@@ -1365,26 +1444,33 @@ int adam_tui_run(void) {
     app.session = 0;
     app.history_index = -1;
     const char *model = getenv("ADAM_MODEL");
-    snprintf(app.model, sizeof(app.model), "%s", model && *model ? model : "gpt-oss:20b");
+    snprintf(app.model, sizeof(app.model), "%s", model && *model ? model : "adam1");
     app.endpoint = getenv("ADAM_OLLAMA_URL");
     if (!app.endpoint || !*app.endpoint) app.endpoint = "http://127.0.0.1:11434";
     app.think_level = getenv("ADAM_THINK");
     if (!app.think_level || !*app.think_level) app.think_level = "medium";
     const char *web_env = getenv("ADAM_WEB_ENABLED");
-    app.web_enabled = web_env && (!strcmp(web_env, "1") ||
-                                  !strcmp(web_env, "true") ||
-                                  !strcmp(web_env, "yes"));
+    app.web_enabled = !web_env ||
+                      (!strcmp(web_env,"1") || !strcmp(web_env,"true") ||
+                       !strcmp(web_env,"yes") || !strcmp(web_env,"on"));
     const char *root_env=getenv("ADAM_FS_ROOT");
     if (root_env && *root_env)
         snprintf(app.fs_workspace,sizeof(app.fs_workspace),"%s",root_env);
     else if (!getcwd(app.fs_workspace,sizeof(app.fs_workspace)))
         app.fs_workspace[0]='\0';
     const char *fs_env=getenv("ADAM_FS_ENABLED");
-    app.fs_enabled = fs_env && (!strcmp(fs_env,"1") ||
-                                !strcmp(fs_env,"true") ||
-                                !strcmp(fs_env,"yes"));
-    if (app.fs_enabled && app.web_enabled) app.web_enabled=false;
-    if (!app.fs_workspace[0]) app.fs_enabled=false;
+    app.fs_enabled = !fs_env ||
+                     (!strcmp(fs_env,"1") || !strcmp(fs_env,"true") ||
+                      !strcmp(fs_env,"yes") || !strcmp(fs_env,"on"));
+    /* Normalize the configured root once; an invalid root disables FS only. */
+    if (app.fs_workspace[0]) {
+        AdamFs initial_root;
+        char fs_error[180]="";
+        if(adam_fs_init(&initial_root,app.fs_workspace,fs_error,sizeof(fs_error))) {
+            snprintf(app.fs_workspace,sizeof(app.fs_workspace),"%s",initial_root.root);
+            adam_fs_close(&initial_root);
+        } else app.fs_enabled=false;
+    } else app.fs_enabled=false;
     const char *theme = getenv("ADAM_TUI_THEME");
     app.light_theme = theme && !strcmp(theme, "light");
     set_status(&app, "Type /chats or press Ctrl+K to browse chats");

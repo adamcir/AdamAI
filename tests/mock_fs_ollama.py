@@ -11,8 +11,10 @@ class Handler(BaseHTTPRequestHandler):
         data = self.rfile.read(int(self.headers['Content-Length']))
         req = json.loads(data)
         names = {t['function']['name'] for t in req.get('tools', [])}
-        assert {'list_directory','read_file','write_file'} <= names, names
-        assert 'web_fetch' not in names, 'FS mode must disable web access'
+        assert {'list_directory','read_file','write_file',
+                'request_workspace','web_fetch'} <= names, names
+        # Both tools are available. Any outbound web call would require
+        # user approval; this test deliberately requests only FS tools.
         messages = req['messages']
         tool_msgs = [m for m in messages if m.get('role') == 'tool']
         if not tool_msgs:

@@ -75,5 +75,12 @@ if(BUILD_TESTING)
                  COMMAND ${Python3_EXECUTABLE}
                          ${CMAKE_CURRENT_SOURCE_DIR}/tests/mock_fs_ollama.py
                          $<TARGET_FILE:adam_fs_loop_test>)
+
+        add_executable(adam_permissions_test tests/test_workspace_web_approvals.c)
+        target_link_libraries(adam_permissions_test PRIVATE adam_core)
+        add_test(NAME workspace_and_web_approvals
+                 COMMAND ${Python3_EXECUTABLE}
+                         ${CMAKE_CURRENT_SOURCE_DIR}/tests/mock_workspace_web.py
+                         $<TARGET_FILE:adam_permissions_test>)
     endif()
 endif()

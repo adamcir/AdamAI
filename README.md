@@ -13,7 +13,7 @@ warm orange for user messages and reasoning, and subtle green borders.
 Both dark (default) and light modes share this green/orange identity.
 
 ```text
- ◆  AdamAI                           gpt-oss:20b   ● Local
+ ◆  AdamAI                           adam1   ● Local
  WORKSPACE / ~/Projects/WORLD-Game
  ─────────────────────────────────────────────────────────
 
@@ -47,12 +47,13 @@ Features:
 - **Persistent conversations:** auto-save to `~/adam-ai/chats/*.json`, restart recovery,
   chat picker (`Ctrl+K` / `/chats`), rename, manual save and confirmed deletion.
 - Asynchronous Ollama API client, cancellation, scrollback and status indicators.
-- **Opt-in filesystem tools:** `list_directory`, `read_file` and `write_file`
-  operate within the open project. Every write waits for a **Y/N approval dialog**
-  that shows the complete proposed file content. Enable with `/fs on`.
-- **Opt-in web tool:** Ollama models supporting function calling can request
-  `web_fetch` to read public HTTPS pages. Use `/web on`, `/web off`,
-  or explicitly `/web https://example.com/` for a one-off visit.
+- **Workspace filesystem tools:** `list_directory`, `read_file`, `write_file`
+  and `request_workspace`. Model-proposed or manual directory changes require
+  an explicit **Y/N approval**, just like writes.
+- **Web access:** `web_fetch` reads public HTTPS pages. Web and FS are **on
+  by default**; when both are on, each outgoing URL requires **Y/N approval**.
+  Each permission can still be disabled with `/web off` or `/fs off`.
+- **Default model:** `adam1`, configurable with `ADAM_MODEL` or `/model`.
 
 ### Linux dependencies
 
@@ -71,12 +72,17 @@ ctest --test-dir build --output-on-failure
 
 ### Run
 
-Start Ollama locally, download a compatible model, then:
+Start Ollama locally and ensure your custom model is available as
+`adam1` (see `ollama list`):
 
 ```bash
-ollama pull gpt-oss:20b
+ollama list
 ./build/AdamAI
 ```
+
+If your custom model instead uses a tag such as `adam1:1.0`, launch with
+`ADAM_MODEL=adam1:1.0 ./build/AdamAI`. A previously saved chat may restore its
+original model; select `/model adam1` to start a new chat with Adam 1.
 
 Or try a lighter model:
 
@@ -87,12 +93,12 @@ ADAM_MODEL=qwen3:8b ADAM_THINK=true ./build/AdamAI
 
 | Environment variable | Default | Description |
 |---|---|---|
-| `ADAM_MODEL` | `gpt-oss:20b` | Ollama model name |
+| `ADAM_MODEL` | `adam1` | Ollama model name (must exist locally) |
 | `ADAM_OLLAMA_URL` | `http://127.0.0.1:11434` | Local Ollama endpoint |
 | `ADAM_THINK` | `medium` | `low`, `medium`, `high`, `true` or `off`, model-dependent |
 | `ADAM_TUI_THEME` | `dark` | `dark` or `light` |
-| `ADAM_WEB_ENABLED` | `0` | Set `1` for opt-in web access at startup |
-| `ADAM_FS_ENABLED` | `0` | Set `1` to enable project filesystem tools at startup |
+| `ADAM_WEB_ENABLED` | `1` | Web tools enabled by default; set `0` to disable |
+| `ADAM_FS_ENABLED` | `1` | FS tools enabled by default; set `0` to disable |
 | `ADAM_FS_ROOT` | Current directory | Explicit project root (defaults to where AdamAI is launched) |
 
 For key bindings, architecture and limitations see [docs/TUI.md](docs/TUI.md).
@@ -132,9 +138,10 @@ last streamed characters. The initial empty chat is saved only once used or when
 
 ### Web access (first implementation)
 
-The internet tool is **off by default**. Type `/web on` and ask AdamAI to read
-a specific URL, or use `/web https://example.com/` for a single fetch without
-turning on automatic browsing. Type `/web off` to disable future requests.
+The internet tool is **enabled by default**. Type `/web off` to disable it,
+`/web on` to re-enable it, or use `/web https://example.com/` for a specific
+URL. When FS is also enabled (the default), **every outgoing HTTPS request
+requires user approval** after the complete destination URL is shown.
 The active model must support Ollama function calls (tools).
 
 The web tool only reads text, HTML or JSON over verified **HTTPS** on port 443.
@@ -153,9 +160,14 @@ and the URL you/model supplied.
 
 ### Filesystem tools (first implementation)
 
-To work with a project, start AdamAI **from its root directory** and type
-`/fs on`. This grants the model access to the project root for the remainder of
-the session. `/fs off` disables file tools for future requests.
+FS tools are now **enabled by default** for the current working directory.
+Start AdamAI from your project root, or set `ADAM_FS_ROOT` to an absolute
+directory. To switch projects during a session, press `Ctrl+W` or type
+`/workspace /absolute/path`. A **Y/N approval dialog** must be accepted before
+the active project changes. The model may likewise call
+`request_workspace("/absolute/path")`, which always requires permission.
+
+`/fs off` disables file tools for future requests, and `/fs on` re-enables them.
 
 ```bash
 cd ~/Dokumenty/Projekty/C-C++/WORLD-Game
@@ -176,11 +188,18 @@ cannot traverse symbolic links. Common secret locations (.git, .env, .ssh,
 .aws) are blocked. Only UTF-8 text files are supported (read limit 128 KiB,
 write limit 32 KiB). Writes use a temporary file and atomic rename, preserving
 the existing file's mode; no new parent directories are created.
-**Filesystem and web tools cannot be enabled together in one request**
-to reduce accidental data exfiltration. Neither tool is enabled by default.
-This is a defense-in-depth boundary, not a fully isolated sandbox: do not
-enable it in untrusted project directories or expose the TUI to unknown users.
+**Filesystem and web tools are both enabled at startup.** Each `web_fetch`
+URL needs a separate user confirmation while FS is active, including the
+`/web URL` one-shot flow. Review the **entire URL and query string** before
+pressing Y, because a model could accidentally include private file contents
+in a URL. Do not approve suspicious destinations.
 
-The selected workspace is the process working directory, unless
-`ADAM_FS_ROOT` is set. Filesystem access happens on your own PC through
+This is defense in depth, **not a security sandbox**. The Ollama model still
+receives local file contents when using FS tools. Disable permissions when
+working with sensitive data or on an untrusted project.
+
+The initial workspace is the process working directory, unless
+`ADAM_FS_ROOT` is set. `/workspace` changes the approved project for subsequent
+model requests (and updates the workspace header/sidebar) without changing the
+application process working directory. Filesystem access happens on your own PC through
 the local application, not through ChatGPT or GitHub.

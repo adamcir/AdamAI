@@ -142,3 +142,26 @@ Saved chats survive a restart; the editable prompt history is process-local.
   model session unless you explicitly accept that risk.
 - No execute_command, recursive search, globbing, applying patches, or Git
   editing yet. The user must verify changes to files before approving.
+
+## Default model, both tool modes and workspace approval
+
+- Default Ollama model: `adam1` (override via `ADAM_MODEL`). A reopened saved
+  conversation retains its previously selected model.
+- Web and FS tools start **enabled**, unless `ADAM_WEB_ENABLED=0` or
+  `ADAM_FS_ENABLED=0` is set. Both can now be active in the same model turn.
+- With FS active, **every** outgoing `web_fetch` request is held behind a
+  scrollable Y/N modal displaying the full destination URL. No HTTP request
+  occurs before approval. In web-only mode, HTTPS requests need no extra modal.
+  This protects against unintended local-data exfiltration, but users must
+  inspect URLs carefully; it is not a full sandbox.
+- `/workspace /absolute/project/path` or `Ctrl+W` requests access to an
+  existing project folder. The dialog displays both old and new roots. Only Y
+  changes the authorized root; N/Esc retains the previous workspace.
+- The model can also call `request_workspace(path)` with an **absolute** path.
+  It cannot switch the directory itself; the model worker blocks until local
+  user approval. On success, the sidebar and subsequent tool requests use the
+  newly approved root. All writes still require their own separate approval.
+- The header/sidebar show the approved FS workspace, not necessarily
+  `getcwd()`. Changes to the project do not erase or change saved chats.
+- This program does not execute shell commands or silently access arbitrary
+  directories; only explicitly approved workspace directories are used.

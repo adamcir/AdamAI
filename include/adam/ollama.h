@@ -7,7 +7,7 @@
 #include <pthread.h>
 #include <stdatomic.h>
 
-typedef enum { ADAM_STREAM_THINKING, ADAM_STREAM_TEXT, ADAM_STREAM_ERROR, ADAM_STREAM_TOOL, ADAM_STREAM_APPROVAL, ADAM_STREAM_DONE } AdamStreamType;
+typedef enum { ADAM_STREAM_THINKING, ADAM_STREAM_TEXT, ADAM_STREAM_ERROR, ADAM_STREAM_TOOL, ADAM_STREAM_APPROVAL, ADAM_STREAM_WORKSPACE, ADAM_STREAM_DONE } AdamStreamType;
 typedef struct AdamStreamEvent {
     AdamStreamType type;
     char *text;
