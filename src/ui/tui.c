@@ -25,7 +25,7 @@
 #define HISTORY_CAP 32
 #define MAX_CHAT_WIDTH 94
 #define SIDEBAR_WIDTH 29
-#define EDIT_ROWS 3
+#define MAX_EDITOR_ROWS 5
 
 /* Pair IDs are constant. All UI colors are configurable through set_theme(). */
 enum {
@@ -372,10 +372,12 @@ static void draw_sidebar(const App *a, int left, int top, int height) {
     attrs(C_FRAME, false);
     mvvline(top, left, ACS_VLINE, height);
     attrs(C_NORMAL, false);
-    line_at(top, inner, width, "WORKSPACE", C_ACCENT, true);
+    line_at(top, inner, width, "PROJECT", C_ACCENT, true);
     char cwd[PATH_MAX];
     cwd_short(cwd, sizeof(cwd));
-    line_at(top + 2, inner, width, cwd, C_NORMAL, false);
+    const char *project = strrchr(cwd, '/');
+    line_at(top + 2, inner, width, project && project[1] ? project + 1 : cwd,
+            C_NORMAL, true);
     line_at(top + 4, inner, width, "MODEL", C_MUTED, true);
     line_at(top + 5, inner, width, a->model, C_NORMAL, false);
     line_at(top + 7, inner, width, "PROVIDER", C_MUTED, true);
@@ -507,44 +509,66 @@ static void editor_position(const wchar_t *text, size_t length, int width,
     *col_out = col;
 }
 
-static void draw_editor(const App *a, int x, int top, int width, int *cy, int *cx) {
-    int text_x = x + 4;
+/* The input grows from one to five visible rows.  At the empty prompt it is
+ * deliberately compact; additional lines are only allocated when needed. */
+static int composer_editor_rows(const App *a, int width) {
     int text_w = width - 7;
+    if (text_w < 1) return 1;
+    int last_row, last_col;
+    editor_position(a->input, a->input_len, text_w, &last_row, &last_col);
+    (void)last_col;
+    return clamp_int(last_row + 1, 1, MAX_EDITOR_ROWS);
+}
+
+static void draw_editor(const App *a, int x, int top, int width, int rows,
+                        int *cy, int *cx) {
+    const int text_x = x + 4;
+    const int text_w = width - 7;
     if (text_w < 1) return;
+
     int cursor_row, cursor_col;
     editor_position(a->input, a->cursor, text_w, &cursor_row, &cursor_col);
-    int scroll_rows = cursor_row >= EDIT_ROWS ? cursor_row - EDIT_ROWS + 1 : 0;
-    *cy = top + 2 + cursor_row - scroll_rows;
+    int scroll_rows = cursor_row >= rows ? cursor_row - rows + 1 : 0;
+    *cy = top + 1 + cursor_row - scroll_rows;
     *cx = text_x + cursor_col;
+
+    /* Prompt is inside the field rather than on a separate row; this also
+     * avoids overwriting the final visible editor line. */
+    line_at(top + 1, x + 2, 2, "❯", C_ACCENT, true);
     if (!a->input_len) {
-        line_at(top + 2, text_x, text_w, "Ask Adam AI, or type / for commands...", C_MUTED, false);
+        line_at(top + 1, text_x, text_w,
+                "Ask Adam AI, or type / for commands...", C_MUTED, false);
         return;
     }
+
     int row = 0, col = 0;
-    attrs(C_PANEL, false);
+    attrs(C_NORMAL, false);
     for (size_t i = 0; i < a->input_len; ++i) {
-        wchar_t c = a->input[i];
-        if (c == L'\n') { ++row; col = 0; continue; }
-        if (iswcntrl(c)) c = L'?';
-        int cw = glyph_width(c);
-        if (cw > text_w) { c = L'?'; cw = 1; }
+        wchar_t ch = a->input[i];
+        if (ch == L'\n') { ++row; col = 0; continue; }
+        if (iswcntrl(ch)) ch = L'?';
+        int cw = glyph_width(ch);
+        if (cw > text_w) { ch = L'?'; cw = 1; }
         if (col + cw > text_w) { ++row; col = 0; }
-        if (row >= scroll_rows && row < scroll_rows + EDIT_ROWS && col + cw <= text_w)
-            mvaddnwstr(top + 2 + row - scroll_rows, text_x + col, &c, 1);
+        if (row >= scroll_rows && row < scroll_rows + rows && col + cw <= text_w)
+            mvaddnwstr(top + 1 + row - scroll_rows, text_x + col, &ch, 1);
         col += cw;
         if (col >= text_w) { ++row; col = 0; }
     }
     attrs(C_NORMAL, false);
 }
 
-static void draw_composer(const App *a, int x, int y, int width, int *cy, int *cx) {
-    frame(y, x, 6, width, a->busy ? C_ACCENT : C_FRAME, C_PANEL);
-    line_at(y, x + 3, width - 6, a->busy ? " MESSAGE  ·  GENERATING" : " MESSAGE", C_ACCENT, true);
-    line_at(y + 1, x + 3, width - 6, a->busy ? "Ctrl+C to stop the response" :
-            "Enter to send    Ctrl+O newline", C_MUTED, false);
-    draw_editor(a, x, y, width, cy, cx);
-    line_at(y + 4, x + 2, 2, "❯", C_ACCENT, true);
-    line_at(y + 6, x + 2, width - 4, "Ctrl+P commands  ·  Ctrl+B sidebar  ·  F1 shortcuts", C_MUTED, false);
+static void draw_composer(const App *a, int x, int y, int width, int rows,
+                          int *cy, int *cx) {
+    /* A low-contrast, transparent-feeling panel instead of the large solid
+     * gray MESSAGE block.  Nothing is drawn on top of the editor rows. */
+    frame(y, x, rows + 2, width, a->busy ? C_ACCENT : C_FRAME, C_NORMAL);
+    draw_editor(a, x, y, width, rows, cy, cx);
+    int hint_y = y + rows + 2;
+    line_at(hint_y, x + 1, width - 2,
+            a->busy ? "● Generating  ·  Ctrl+C stop  ·  Ctrl+T thinking" :
+                      "Enter send  ·  Ctrl+O newline  ·  Ctrl+P commands", 
+            a->busy ? C_ACCENT : C_MUTED, false);
 }
 
 static void draw(App *a) {
@@ -561,7 +585,8 @@ static void draw(App *a) {
     if (cw > MAX_CHAT_WIDTH) cw = MAX_CHAT_WIDTH;
     int cx = (content_right - cw) / 2;
     int top = 3;
-    int composer_top = h - 9;
+    int edit_rows = composer_editor_rows(a, cw);
+    int composer_top = h - edit_rows - 4;
     int available = composer_top - top;
     fill_span(0, 0, w, C_NORMAL);
     line_at(0, 2, content_right - 4, "◆  ADAM AI", C_ACCENT, true);
@@ -607,8 +632,8 @@ static void draw(App *a) {
         free_view(&lines);
     }
     if (sidebar) draw_sidebar(a, content_right, top, h - top - 1);
-    int cy = composer_top + 2, cx_cursor = cx + 4;
-    draw_composer(a, cx, composer_top, cw, &cy, &cx_cursor);
+    int cy = composer_top + 1, cx_cursor = cx + 4;
+    draw_composer(a, cx, composer_top, cw, edit_rows, &cy, &cx_cursor);
     if (!a->help_open) draw_palette(a, cx, composer_top, cw);
     if (a->help_open) draw_help(cx, cw, 2, composer_top + 4);
     fill_span(h - 1, 0, w, C_NORMAL);

@@ -11,7 +11,7 @@ assets from those products were copied.
 - Visually separated user panels, assistant messages, collapsed reasoning,
   simple Markdown block rendering (headings, bullets, quotes, fenced code).
 - A small welcome screen for a fresh conversation.
-- Fixed bottom composer with three visible editable lines. Use **Ctrl+O** to
+- Compact bottom composer that grows from one to five visible editable lines. Use **Ctrl+O** to
   insert a newline and **Enter** to send. Unicode text is supported.
 - Optional right sidebar showing workspace, model, session, and shortcuts.
   It is shown by default on terminals at least 108 columns wide.
@@ -58,5 +58,5 @@ Commands: `/help`, `/new`, `/clear`, `/model NAME`, `/thinking`, `/sidebar`,
 This version is a **chat client**, not yet a filesystem or internet agent.
 It does not run shell commands, mutate files or save sessions to disk.
 Markdown is intentionally basic and not a full CommonMark parser.
-The editor shows three rows at a time; it scrolls to follow the cursor.
+The editor displays up to five rows; overflowing messages scroll to follow the cursor.
 Sessions and prompt history exist only during the current process lifetime.

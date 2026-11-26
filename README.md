@@ -24,12 +24,10 @@ It is **not** a fork of those applications and does not include their source cod
     ▸ Thinking · Ctrl+T to expand
     First, I would review the existing Vulkan code ...
 
- ┌ MESSAGE ──────────────────────────────────────────────┐
- │ Enter to send    Ctrl+O newline                      │
- │  Ask Adam AI, or type / for commands...               │
- │                                                       │
+ ┌───────────────────────────────────────────────────────┐
+ │ ❯ Ask Adam AI, or type / for commands...             │
  └───────────────────────────────────────────────────────┘
- Ctrl+P commands · Ctrl+B sidebar · F1 shortcuts
+ Enter send · Ctrl+O newline · Ctrl+P commands
 ```
 
 This text is an approximate layout, not a screenshot. The actual interface
@@ -39,7 +37,7 @@ Features:
 
 - Streamed answers, with separately collapsible reasoning when a model provides it.
 - Centered transcript, user panels, simple Markdown blocks and fenced code panels.
-- Three-line Unicode composer; `Ctrl+O` inserts a newline, `Enter` sends.
+- Compact, auto-expanding Unicode composer (1–5 visible rows); `Ctrl+O` inserts a newline, `Enter` sends.
 - Slash-command palette (`/` or `Ctrl+P`), F1 shortcut help, prompt history.
 - Optional workspace sidebar (`Ctrl+B`) and dark/light themes (`/theme`).
 - Asynchronous Ollama API client, cancellation, scrollback and status indicators.
