@@ -8,6 +8,7 @@
 #include "adam/editor_layout.h"
 #include "adam/chat.h"
 #include "adam/ollama.h"
+#include "adam/text_wrap.h"
 #include <ncursesw/curses.h>
 #include <curl/curl.h>
 #include <limits.h>
@@ -153,38 +154,36 @@ static void view_label(View *v, const char *s, int color, int indent,
 static void view_gap(View *v) { view_line(v, L"", 0, C_NORMAL, 0, false, false); }
 
 /* Wide-character-aware wrapping. Width measures terminal cells, not codepoints. */
-static void view_wrap(View *v, const char *source, int width, int color,
-                      int indent, bool panel) {
-    if (width <= indent) return;
+typedef struct {
+    View *view;
+    int color, indent;
+    bool panel;
+} WrapView;
+
+static bool view_wrap_emit(const wchar_t *line, size_t count, void *userdata) {
+    WrapView *w = userdata;
+    return view_line(w->view, line, count, w->color, w->indent, false, w->panel);
+}
+
+/* Normal text: word boundaries. Code: preserve exact spaces and fixed-width wrapping. */
+static void view_wrap_mode(View *v, const char *source, int width, int color,
+                           int indent, bool panel, AdamWrapMode mode) {
+    if (width <= indent || !source) return;
     wchar_t *wide = to_wide(source);
     if (!wide) return;
-    int available = width - indent;
-    wchar_t *line = calloc((size_t)available + 2, sizeof(*line));
-    if (!line) { free(wide); return; }
-    size_t used = 0;
-    int cells = 0;
-    for (size_t i = 0; wide[i]; ++i) {
-        wchar_t c = wide[i];
-        if (c == L'\r') continue;
-        if (c == L'\n') {
-            view_line(v, line, used, color, indent, false, panel);
-            used = 0; cells = 0;
-            continue;
-        }
-        if (c == L'\t') c = L' ';
-        if (iswcntrl(c)) c = L'?';
-        int cw = glyph_width(c);
-        if (cw > available) { c = L'?'; cw = 1; }
-        if (cells + cw > available || used >= (size_t)available + 1) {
-            view_line(v, line, used, color, indent, false, panel);
-            used = 0; cells = 0;
-        }
-        line[used++] = c;
-        cells += cw;
-    }
-    if (used) view_line(v, line, used, color, indent, false, panel);
-    free(line);
+    WrapView ctx = {v, color, indent, panel};
+    (void)adam_wrap_lines(wide, width - indent, mode, view_wrap_emit, &ctx);
     free(wide);
+}
+
+static void view_wrap(View *v, const char *source, int width, int color,
+                      int indent, bool panel) {
+    view_wrap_mode(v, source, width, color, indent, panel, ADAM_WRAP_WORDS);
+}
+
+static void view_wrap_code(View *v, const char *source, int width, int color,
+                           int indent, bool panel) {
+    view_wrap_mode(v, source, width, color, indent, panel, ADAM_WRAP_VERBATIM);
 }
 
 /* Compact block-level Markdown presentation for common coding answers.
@@ -211,7 +210,7 @@ static void view_markdown(View *v, const char *source, int width) {
             }
             code = !code;
         } else if (code) {
-            if (*line) view_wrap(v, line, width - 2, C_PANEL, 2, true);
+            if (*line) view_wrap_code(v, line, width - 2, C_PANEL, 2, true);
             else view_line(v, L"", 0, C_PANEL, 0, false, true);
         } else if (!*line) {
             view_gap(v);
