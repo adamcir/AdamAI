@@ -118,3 +118,27 @@ Saved chats survive a restart; the editable prompt history is process-local.
   redirects, or automatic verification of what a page claims. Model-generated
   tool calls are limited to two rounds per user turn. Some model builds cannot
   emit Ollama-compatible function calls; in that case use a supported model.
+
+## Workspace filesystem agent tools (initial version)
+
+- `src/tools/fs_tool.c` uses directory file descriptors and `openat` with
+  `O_NOFOLLOW` to keep operations inside the chosen project root. Absolute
+  paths, `..` and symlink traversal are rejected. Common secret locations
+  are blocked by default.
+- `list_directory(path)`: up to 128 entries per directory, directories/files/
+  symlinks distinguished, no recursive traversal.
+- `read_file(path)`: UTF-8 text only, 128 KiB maximum.
+- `write_file(path, content)`: UTF-8 text only, 32 KiB maximum. Replaces an
+  entire file or creates it if its parent directory exists. A blocking
+  approval gate waits for a **real Y/N keypress in the TUI** before writing.
+  The complete proposal is scrollable, and denial is returned as a tool result.
+  Writes use an atomic temporary-file rename with fsync.
+- Enable with `/fs on`, disable with `/fs off`, check with `/fs status`.
+  Default is off, or `ADAM_FS_ENABLED=1` at startup. Root defaults to
+  current working directory; `ADAM_FS_ROOT` can override it.
+- Security: the application never exposes both FS and outgoing web tools to
+  the model at the same time. Still, model output may contain contents read
+  from files, so do not feed a conversation with private data to a web-enabled
+  model session unless you explicitly accept that risk.
+- No execute_command, recursive search, globbing, applying patches, or Git
+  editing yet. The user must verify changes to files before approving.

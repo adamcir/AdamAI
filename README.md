@@ -47,6 +47,9 @@ Features:
 - **Persistent conversations:** auto-save to `~/adam-ai/chats/*.json`, restart recovery,
   chat picker (`Ctrl+K` / `/chats`), rename, manual save and confirmed deletion.
 - Asynchronous Ollama API client, cancellation, scrollback and status indicators.
+- **Opt-in filesystem tools:** `list_directory`, `read_file` and `write_file`
+  operate within the open project. Every write waits for a **Y/N approval dialog**
+  that shows the complete proposed file content. Enable with `/fs on`.
 - **Opt-in web tool:** Ollama models supporting function calling can request
   `web_fetch` to read public HTTPS pages. Use `/web on`, `/web off`,
   or explicitly `/web https://example.com/` for a one-off visit.
@@ -89,13 +92,16 @@ ADAM_MODEL=qwen3:8b ADAM_THINK=true ./build/AdamAI
 | `ADAM_THINK` | `medium` | `low`, `medium`, `high`, `true` or `off`, model-dependent |
 | `ADAM_TUI_THEME` | `dark` | `dark` or `light` |
 | `ADAM_WEB_ENABLED` | `0` | Set `1` for opt-in web access at startup |
+| `ADAM_FS_ENABLED` | `0` | Set `1` to enable project filesystem tools at startup |
+| `ADAM_FS_ROOT` | Current directory | Explicit project root (defaults to where AdamAI is launched) |
 
 For key bindings, architecture and limitations see [docs/TUI.md](docs/TUI.md).
 
 ### Current limitations
 
-This preview provides chat, saved sessions and the first **read-only web_fetch
-agent tool**, but not filesystem tools, shell execution or general web search.
+This preview provides chat, saved sessions, the **read-only web_fetch**
+internet tool and scoped **filesystem tools**. It still cannot run shell
+commands, browse JavaScript websites or search the web automatically.
 Chat histories remain local (not sent to GitHub). Internet requests can contact
 external servers when web mode is enabled or a one-off URL is provided.
 Do not confuse the application's local *workspace label* with filesystem access.
@@ -144,3 +150,37 @@ A browsing action happens in a background Ollama request worker; `Ctrl+C`
 cancels it. Visited URLs are visible in the conversation, but fetched page
 bodies are not saved to chat history. External websites can see network requests
 and the URL you/model supplied.
+
+### Filesystem tools (first implementation)
+
+To work with a project, start AdamAI **from its root directory** and type
+`/fs on`. This grants the model access to the project root for the remainder of
+the session. `/fs off` disables file tools for future requests.
+
+```bash
+cd ~/Dokumenty/Projekty/C-C++/WORLD-Game
+/path/to/AdamAI/build/AdamAI
+# In AdamAI: /fs on
+```
+
+Ask AdamAI to list files, read a C source file, or propose a modification.
+`list_directory(path)` and `read_file(path)` are read-only.
+`write_file(path, content)` requires **explicit approval every time**:
+the ncurses dialog displays the complete proposed content; scroll with
+PgUp/PgDn or arrows and press `Y` to approve, `N` or Esc to reject.
+There is no shell tool and no automatic write approval. The write replaces the
+entire file, so review it carefully. A denied write is reported to the model.
+
+Paths are relative to the project, cannot use `..` or absolute paths and
+cannot traverse symbolic links. Common secret locations (.git, .env, .ssh,
+.aws) are blocked. Only UTF-8 text files are supported (read limit 128 KiB,
+write limit 32 KiB). Writes use a temporary file and atomic rename, preserving
+the existing file's mode; no new parent directories are created.
+**Filesystem and web tools cannot be enabled together in one request**
+to reduce accidental data exfiltration. Neither tool is enabled by default.
+This is a defense-in-depth boundary, not a fully isolated sandbox: do not
+enable it in untrusted project directories or expose the TUI to unknown users.
+
+The selected workspace is the process working directory, unless
+`ADAM_FS_ROOT` is set. Filesystem access happens on your own PC through
+the local application, not through ChatGPT or GitHub.

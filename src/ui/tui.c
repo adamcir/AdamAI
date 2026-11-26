@@ -66,6 +66,7 @@ static const Command commands[] = {
     {"/delete", "Delete current chat (confirmation required)", false},
     {"/model", "Choose an Ollama model", true},
     {"/web", "Web access: on/off, or /web HTTPS_URL", true},
+    {"/fs", "Workspace files: on/off (writes require approval)", true},
     {"/thinking", "Toggle reasoning display", false},
     {"/sidebar", "Toggle workspace sidebar", false},
     {"/theme", "Switch dark / light appearance", false},
@@ -98,7 +99,10 @@ typedef struct {
     int saved_chat_index;
     char chat_directory[PATH_MAX];
     bool store_ready, dirty, chats_open, confirm_delete;
-    bool web_enabled;
+    bool web_enabled, fs_enabled, approval_open;
+    char fs_workspace[PATH_MAX];
+    char *approval_details;
+    int approval_scroll;
     time_t last_save;
 } App;
 
@@ -414,6 +418,10 @@ static void draw_sidebar(const App *a, int left, int top, int height) {
         line_at(top + 19, inner, width,
                 a->web_enabled ? "Web: enabled" : "Web: disabled",
                 a->web_enabled ? C_GOOD : C_MUTED, false);
+        if (height > 22)
+            line_at(top + 20, inner, width,
+                    a->fs_enabled ? "FS: enabled" : "FS: disabled",
+                    a->fs_enabled ? C_GOOD : C_MUTED, false);
     }
     if (height > 26) {
         line_at(top + height - 5, inner, width, "Ctrl+K  chats", C_MUTED, false);
@@ -497,6 +505,7 @@ static void draw_help(int x, int width, int top, int available) {
         "Ctrl+O        Insert newline in composer",
         "Ctrl+P        Open slash-command palette",
         "Web           /web on/off or /web HTTPS_URL",
+        "Files         /fs on/off  (write requires Y)",
         "Ctrl+K        Browse saved chats",
         "Ctrl+B        Show / hide workspace sidebar",
         "Ctrl+T        Expand / collapse reasoning",
@@ -561,6 +570,35 @@ static void draw_chats(const App *a, int x, int top, int width, int available) {
             a->confirm_delete ? "Delete selected chat?  Y confirm  N/Esc cancel" :
             "Enter open  ·  D delete  ·  Esc close  ·  Ctrl+L new",
             a->confirm_delete ? C_WARNING : C_MUTED, false);
+}
+
+
+/* Exact proposed file content is displayed on a scrollable review surface.
+ * Approval comes only from the user's Y key, never from model text. */
+static void draw_fs_approval(App *a, int x, int top, int width, int height) {
+    if (!a->approval_open || !a->approval_details || width < 36 || height < 9) return;
+    int w = width < 100 ? width : 100;
+    int h = height < 27 ? height : 27;
+    int left = x + (width - w)/2;
+    int y = top + (height - h)/2;
+    frame(y,left,h,w,C_WARNING,C_PANEL);
+    line_at(y+1,left+3,w-6,"WRITE FILE  ·  USER APPROVAL REQUIRED",C_WARNING,true);
+    View preview={0};
+    view_wrap_code(&preview,a->approval_details,w-7,C_PANEL,0,false);
+    int rows=h-6;
+    int max_scroll=preview.count>(size_t)rows ? (int)preview.count-rows : 0;
+    a->approval_scroll=clamp_int(a->approval_scroll,0,max_scroll);
+    for(int row=0;row<rows;row++){
+        size_t index=(size_t)a->approval_scroll+(size_t)row;
+        if(index>=preview.count) break;
+        wline_at(y+3+row,left+3,w-6,preview.data[index].text,C_PANEL,false);
+    }
+    char hint[160];
+    snprintf(hint,sizeof(hint),
+             "Y APPROVE  N/Esc REJECT  PgUp/PgDn scroll  (%d/%d)",
+             a->approval_scroll+1,max_scroll+1);
+    line_at(y+h-2,left+3,w-6,hint,C_WARNING,true);
+    free_view(&preview);
 }
 
 /* The editor and cursor use the exact same word-aware layout.  Without a
@@ -699,13 +737,14 @@ static void draw(App *a) {
     if (!a->help_open && !a->chats_open) draw_palette(a, cx, composer_top, cw);
     if (a->help_open && !a->chats_open) draw_help(cx, cw, 2, composer_top + 4);
     if (a->chats_open) draw_chats(a, chat_x, chat_y, chat_w, chat_h);
+    if (a->approval_open) draw_fs_approval(a, chat_x, chat_y, chat_w, chat_h);
     fill_span(h - 1, 0, w, C_NORMAL);
     char footer[384];
     snprintf(footer, sizeof(footer), " %.65s  ·  %zu messages  ·  %s  ·  %s",
              a->active_chat.title, a->chat.count,
              a->busy ? "Streaming" : (a->dirty ? "Unsaved" : "Saved"), a->status);
     line_at(h - 1, 2, w - 4, footer, a->saw_error ? C_ERROR : C_MUTED, false);
-    if (a->help_open || a->chats_open) { curs_set(0); }
+    if (a->help_open || a->chats_open || a->approval_open) { curs_set(0); }
     else {
         curs_set(1);
         move(clamp_int(cy, 0, h - 1), clamp_int(cx_cursor, 0, w - 1));
@@ -917,6 +956,10 @@ static void command(App *a, const char *input) {
         return;
     }
     if (!strcmp(input, "/web on")) {
+        if (a->fs_enabled) {
+            set_status(a, "Disable FS (/fs off) before enabling web");
+            return;
+        }
         a->web_enabled = true;
         set_status(a, "Web tool enabled for this session");
         return;
@@ -924,6 +967,28 @@ static void command(App *a, const char *input) {
     if (!strcmp(input, "/web off")) {
         a->web_enabled = false;
         set_status(a, "Web tool disabled for future requests");
+        return;
+    }
+    if (!strcmp(input, "/fs") || !strcmp(input, "/fs status")) {
+        char status[256];
+        snprintf(status,sizeof(status),"FS %s  (root: %.180s)",
+                 a->fs_enabled ? "enabled" : "disabled",a->fs_workspace);
+        set_status(a,status);
+        return;
+    }
+    if (!strcmp(input, "/fs on")) {
+        if (a->web_enabled) {
+            set_status(a,"Disable web (/web off) before enabling FS");
+            return;
+        }
+        if (!a->fs_workspace[0]) { set_status(a,"Workspace unavailable"); return; }
+        a->fs_enabled=true;
+        set_status(a,"FS enabled: project-relative reads; writes require Y approval");
+        return;
+    }
+    if (!strcmp(input, "/fs off")) {
+        a->fs_enabled=false;
+        set_status(a,"FS tool disabled for future requests");
         return;
     }
     if (!strcmp(input, "/thinking")) {
@@ -1016,7 +1081,8 @@ static void submit(App *a) {
     }
     (void)save_current_chat(a); /* Save the prompt BEFORE starting inference. */
     if (!adam_ollama_start(&a->stream, &a->chat, a->model, a->endpoint,
-                           a->think_level, a->web_enabled || direct_web)) {
+                           a->think_level, a->web_enabled || direct_web,
+                           a->fs_enabled && !direct_web, a->fs_workspace)) {
         adam_text_append(&a->chat.items[a->chat.count - 1].content, "Could not launch model request.");
         a->dirty = true;
         (void)save_current_chat(a);
@@ -1047,12 +1113,19 @@ static void process_stream(App *a) {
             case ADAM_STREAM_TOOL:
                 if (event->text) {
                     if (m->content && *m->content) adam_text_append(&m->content, "\n");
-                    adam_text_append(&m->content, "[Web] ");
+                    adam_text_append(&m->content, "[Tool] ");
                     adam_text_append(&m->content, event->text);
                     adam_text_append(&m->content, "\n");
                     a->dirty = true;
                 }
-                set_status(a, "Web tool: loading page...");
+                set_status(a, "Tool operation...");
+                break;
+            case ADAM_STREAM_APPROVAL:
+                free(a->approval_details);
+                a->approval_details = strdup(event->text ? event->text : "");
+                a->approval_scroll = 0;
+                a->approval_open = a->approval_details != NULL;
+                set_status(a,"Write approval: Y confirm, N/Esc reject, PgUp/PgDn review");
                 break;
             case ADAM_STREAM_ERROR:
                 if (m->content && *m->content) adam_text_append(&m->content, "\n");
@@ -1064,6 +1137,9 @@ static void process_stream(App *a) {
                 break;
             case ADAM_STREAM_DONE:
                 a->busy = false;
+                a->approval_open = false;
+                free(a->approval_details);
+                a->approval_details = NULL;
                 if (!a->saw_error) set_status(a, "Response complete");
                 (void)save_current_chat(a);
                 break;
@@ -1079,6 +1155,9 @@ static void cancel_stream(App *a) {
     if (!a->busy) return;
     adam_ollama_stop(&a->stream);
     a->busy = false;
+    a->approval_open = false;
+    free(a->approval_details);
+    a->approval_details = NULL;
     AdamMessage *m = &a->chat.items[a->chat.count - 1];
     adam_text_append(&m->content, "\n[Generation cancelled]");
     a->dirty = true;
@@ -1120,6 +1199,33 @@ static void palette_enter(App *a) {
 }
 
 static void input_key(App *a, wint_t key, bool special) {
+    if (a->approval_open) {
+        if (special) {
+            switch(key) {
+                case KEY_PPAGE:
+                case KEY_UP:
+                    if(a->approval_scroll>0) --a->approval_scroll;
+                    break;
+                case KEY_NPAGE:
+                case KEY_DOWN:
+                    if(a->approval_scroll<INT_MAX) ++a->approval_scroll;
+                    break;
+                default:break;
+            }
+        } else if (key==L'y' || key==L'Y' || key==L'n' || key==L'N' ||
+                   key==27) {
+            bool yes=key==L'y'||key==L'Y';
+            (void)adam_ollama_answer_approval(&a->stream,yes);
+            a->approval_open=false;
+            free(a->approval_details);
+            a->approval_details=NULL;
+            set_status(a,yes?"Write approved; waiting for result":
+                            "Write rejected; model informed");
+        } else if(key==3) {
+            cancel_stream(a);
+        }
+        return;
+    }
     if (a->chats_open) {
         if (special) {
             switch (key) {
@@ -1263,6 +1369,17 @@ int adam_tui_run(void) {
     app.web_enabled = web_env && (!strcmp(web_env, "1") ||
                                   !strcmp(web_env, "true") ||
                                   !strcmp(web_env, "yes"));
+    const char *root_env=getenv("ADAM_FS_ROOT");
+    if (root_env && *root_env)
+        snprintf(app.fs_workspace,sizeof(app.fs_workspace),"%s",root_env);
+    else if (!getcwd(app.fs_workspace,sizeof(app.fs_workspace)))
+        app.fs_workspace[0]='\0';
+    const char *fs_env=getenv("ADAM_FS_ENABLED");
+    app.fs_enabled = fs_env && (!strcmp(fs_env,"1") ||
+                                !strcmp(fs_env,"true") ||
+                                !strcmp(fs_env,"yes"));
+    if (app.fs_enabled && app.web_enabled) app.web_enabled=false;
+    if (!app.fs_workspace[0]) app.fs_enabled=false;
     const char *theme = getenv("ADAM_TUI_THEME");
     app.light_theme = theme && !strcmp(theme, "light");
     set_status(&app, "Type /chats or press Ctrl+K to browse chats");
@@ -1305,6 +1422,7 @@ int adam_tui_run(void) {
     endwin();
     for (size_t i = 0; i < app.history_count; ++i) free(app.history[i]);
     free(app.draft);
+    free(app.approval_details);
     adam_chat_clear(&app.chat);
     curl_global_cleanup();
     return 0;

@@ -16,6 +16,7 @@ add_library(adam_core STATIC
     src/core/chat.c
     src/core/chat_store.c
     src/tools/web_fetch.c
+    src/tools/fs_tool.c
     src/backends/ollama.c
 )
 target_include_directories(adam_core PUBLIC include)
@@ -51,6 +52,10 @@ if(BUILD_TESTING)
     target_link_libraries(adam_chat_store_test PRIVATE adam_core)
     add_test(NAME chat_store COMMAND adam_chat_store_test)
 
+    add_executable(adam_fs_tool_test tests/test_fs_tool.c)
+    target_link_libraries(adam_fs_tool_test PRIVATE adam_core)
+    add_test(NAME fs_tool COMMAND adam_fs_tool_test)
+
     add_executable(adam_web_fetch_test tests/test_web_fetch.c)
     target_link_libraries(adam_web_fetch_test PRIVATE adam_core)
     add_test(NAME web_fetch COMMAND adam_web_fetch_test)
@@ -63,5 +68,12 @@ if(BUILD_TESTING)
                  COMMAND ${Python3_EXECUTABLE}
                          ${CMAKE_CURRENT_SOURCE_DIR}/tests/mock_ollama.py
                          $<TARGET_FILE:adam_web_loop_test>)
+
+        add_executable(adam_fs_loop_test tests/test_ollama_fs_loop.c)
+        target_link_libraries(adam_fs_loop_test PRIVATE adam_core)
+        add_test(NAME ollama_fs_tool_loop
+                 COMMAND ${Python3_EXECUTABLE}
+                         ${CMAKE_CURRENT_SOURCE_DIR}/tests/mock_fs_ollama.py
+                         $<TARGET_FILE:adam_fs_loop_test>)
     endif()
 endif()

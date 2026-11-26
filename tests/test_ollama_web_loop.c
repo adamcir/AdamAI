@@ -15,7 +15,7 @@ int main(int argc, char **argv) {
     AdamChat chat; adam_chat_init(&chat);
     assert(adam_chat_add(&chat, ADAM_ROLE_USER, "Read the site") != NULL);
     AdamStream stream;
-    assert(adam_ollama_start(&stream,&chat,"test",endpoint,"off",true));
+    assert(adam_ollama_start(&stream,&chat,"test",endpoint,"off",true,false,NULL));
     int tool=0,txt=0,err=0,done=0;
     for (int i=0;i<500 && !done;i++) {
         AdamStreamEvent *ev;
