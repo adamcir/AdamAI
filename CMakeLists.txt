@@ -14,6 +14,7 @@ find_package(Threads REQUIRED)
 
 add_library(adam_core STATIC
     src/core/chat.c
+    src/core/chat_store.c
     src/backends/ollama.c
 )
 target_include_directories(adam_core PUBLIC include)
@@ -44,4 +45,8 @@ if(BUILD_TESTING)
     add_executable(adam_text_wrap_test tests/test_text_wrap.c src/ui/text_wrap.c)
     target_include_directories(adam_text_wrap_test PRIVATE include)
     add_test(NAME text_wrap COMMAND adam_text_wrap_test)
+
+    add_executable(adam_chat_store_test tests/test_chat_store.c)
+    target_link_libraries(adam_chat_store_test PRIVATE adam_core)
+    add_test(NAME chat_store COMMAND adam_chat_store_test)
 endif()

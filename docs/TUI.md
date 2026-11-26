@@ -35,7 +35,8 @@ text backgrounds. The palette also has a light variant and an 8-color fallback.
 | Up/Down | Choose a slash command, or browse prior prompts |
 | Ctrl+B | Toggle sidebar |
 | Ctrl+T | Expand/collapse reasoning returned by the model |
-| Ctrl+L | New conversation (when not generating) |
+| Ctrl+L | New saved conversation (when not generating) |
+| Ctrl+K | Browse saved conversations |
 | Ctrl+C | Cancel the current Ollama request |
 | Ctrl+Q | Exit |
 | F1 | Show keyboard help |
@@ -44,8 +45,8 @@ text backgrounds. The palette also has a light variant and an 8-color fallback.
 | Ctrl+A / Ctrl+E / Ctrl+U | Go to start/end of input, or clear input |
 | Escape | Close a popup |
 
-Commands: `/help`, `/new`, `/clear`, `/model NAME`, `/thinking`, `/sidebar`,
-`/theme`, `/status`, `/quit`.
+Commands: `/help`, `/new`, `/clear`, `/chats`, `/save`, `/rename TITLE`,
+`/delete`, `/model NAME`, `/thinking`, `/sidebar`, `/theme`, `/status`, `/quit`.
 
 ## Implementation
 
@@ -62,10 +63,11 @@ Commands: `/help`, `/new`, `/clear`, `/model NAME`, `/thinking`, `/sidebar`,
 ## Known limitations
 
 This version is a **chat client**, not yet a filesystem or internet agent.
-It does not run shell commands, mutate files or save sessions to disk.
+It does not run shell commands or modify project files. Chat histories are persisted
+locally under `~/adam-ai/chats/`.
 Markdown is intentionally basic and not a full CommonMark parser.
 The editor displays up to five rows; overflowing messages scroll to follow the cursor.
-Sessions and prompt history exist only during the current process lifetime.
+Saved chats survive a restart; the editable prompt history is process-local.
 
 ## Word-aware composer layout
 
@@ -75,3 +77,21 @@ Sessions and prompt history exist only during the current process lifetime.
 - Explicit newlines are respected. Unicode glyph widths are calculated with `wcwidth` in the active UTF-8 locale.
 - The editor remains compact until additional rows are needed (up to 5 visible rows) and keeps the cursor in view when editing longer prompts.
 - `tests/test_editor_layout.c` covers the reported Czech `Lorem Ipsum` wrapping regression, exact boundaries, explicit newlines and full-width Unicode.
+
+## Persistent conversations
+
+- `include/adam/chat_store.h` and `src/core/chat_store.c` implement JSON persistence
+  (json-c) independently of curses.
+- Directory: `~/adam-ai/chats/`. Directory creation uses mode 0700, files 0600.
+- Each chat has a stable filename ID, user-editable title, last-used model, updated
+  timestamp, and its user/assistant messages with content and optional reasoning.
+- Only IDs consisting of ASCII letters, numbers, `-` and `_` are accepted in file
+  operations; path traversal and symlink file loading are rejected.
+- Saves are written via a temporary file + fsync + rename. The old file remains
+  intact if a write fails.
+- On launch, the most recently modified saved chat is automatically loaded.
+  The in-TUI picker supports opening and deleting with confirmation.
+- The active chat is checkpointed after sending a prompt, every ~2 seconds while
+  streaming, on completion/cancellation and before switching or exiting.
+- Conversation list is limited to 128 most recent entries in this preview.
+  Simultaneous AdamAI processes do not yet implement per-chat write locking.

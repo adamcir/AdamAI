@@ -7,6 +7,7 @@
 #include "adam/tui.h"
 #include "adam/editor_layout.h"
 #include "adam/chat.h"
+#include "adam/chat_store.h"
 #include "adam/ollama.h"
 #include "adam/text_wrap.h"
 #include <ncursesw/curses.h>
@@ -57,7 +58,11 @@ typedef struct {
 static const Command commands[] = {
     {"/help", "Keyboard shortcuts and commands", false},
     {"/new", "Start a new conversation", false},
-    {"/clear", "Clear conversation history", false},
+    {"/clear", "Start a new chat (keeps saved history)", false},
+    {"/chats", "Browse saved conversations", false},
+    {"/save", "Save the active conversation", false},
+    {"/rename", "Rename current conversation", true},
+    {"/delete", "Delete current chat (confirmation required)", false},
     {"/model", "Choose an Ollama model", true},
     {"/thinking", "Toggle reasoning display", false},
     {"/sidebar", "Toggle workspace sidebar", false},
@@ -85,6 +90,13 @@ typedef struct {
     const char *endpoint, *think_level;
     unsigned spin;
     unsigned session;
+    AdamStoredChat active_chat;
+    AdamStoredChat saved_chats[ADAM_CHAT_LIST_LIMIT];
+    size_t saved_chat_count;
+    int saved_chat_index;
+    char chat_directory[PATH_MAX];
+    bool store_ready, dirty, chats_open, confirm_delete;
+    time_t last_save;
 } App;
 
 static void set_status(App *a, const char *s) {
@@ -387,20 +399,18 @@ static void draw_sidebar(const App *a, int left, int top, int height) {
     line_at(top + 7, inner, width, "PROVIDER", C_MUTED, true);
     line_at(top + 8, inner, width, "Ollama  /  local", C_NORMAL, false);
     if (height > 14) {
-        line_at(top + 10, inner, width, "SESSION", C_MUTED, true);
-        char info[96];
-        snprintf(info, sizeof(info), "Chat %02u  ·  %zu messages", a->session, a->chat.count);
-        line_at(top + 11, inner, width, info, C_NORMAL, false);
-        line_at(top + 13, inner, width, "REASONING", C_THINK, true);
-        line_at(top + 14, inner, width, a->show_thinking ? "Visible" : "Collapsed", C_NORMAL, false);
+        line_at(top + 10, inner, width, "CURRENT CHAT", C_MUTED, true);
+        line_at(top + 11, inner, width, a->active_chat.title, C_NORMAL, false);
+        line_at(top + 13, inner, width, "SAVED CHATS", C_ACCENT, true);
+        line_at(top + 14, inner, width, "Ctrl+K  /chats", C_NORMAL, false);
     }
     if (height > 20) {
-        line_at(top + 17, inner, width, "WORKFLOW", C_MUTED, true);
-        line_at(top + 18, inner, width, "Chat mode", C_GOOD, false);
+        line_at(top + 17, inner, width, "REASONING", C_THINK, true);
+        line_at(top + 18, inner, width, a->show_thinking ? "Visible" : "Collapsed", C_NORMAL, false);
         line_at(top + 19, inner, width, "Agent tools: coming soon", C_MUTED, false);
     }
     if (height > 26) {
-        line_at(top + height - 5, inner, width, "Ctrl+P  commands", C_MUTED, false);
+        line_at(top + height - 5, inner, width, "Ctrl+K  chats", C_MUTED, false);
         line_at(top + height - 4, inner, width, "Ctrl+T  thinking", C_MUTED, false);
         line_at(top + height - 3, inner, width, "Ctrl+B  sidebar", C_MUTED, false);
     }
@@ -477,9 +487,10 @@ static void draw_help(int x, int width, int top, int available) {
         "Enter         Send message or run command",
         "Ctrl+O        Insert newline in composer",
         "Ctrl+P        Open slash-command palette",
+        "Ctrl+K        Browse saved chats",
         "Ctrl+B        Show / hide workspace sidebar",
         "Ctrl+T        Expand / collapse reasoning",
-        "Ctrl+L        Start new conversation",
+        "Ctrl+L        Start a new saved conversation",
         "Ctrl+C        Cancel streaming response",
         "Ctrl+Q        Exit AdamAI",
         "PgUp/PgDn     Scroll through conversation",
@@ -493,6 +504,53 @@ static void draw_help(int x, int width, int top, int available) {
     for (size_t i = 0; i < count && (int)i < h - 4; ++i)
         line_at(y + 3 + (int)i, left + 3, w - 6, rows[i], i == count - 1 ? C_WARNING : C_PANEL, false);
     line_at(y + h - 2, left + 3, w - 6, "ESC / F1 to close", C_MUTED, false);
+}
+
+
+/* Popup for reopening, switching and deleting persisted chat histories. */
+static void draw_chats(const App *a, int x, int top, int width, int available) {
+    if (!a->chats_open || available < 9 || width < 38) return;
+    int visible = available - 6;
+    if (visible > 10) visible = 10;
+    if (visible < 1) visible = 1;
+    if ((size_t)visible > a->saved_chat_count)
+        visible = a->saved_chat_count ? (int)a->saved_chat_count : 1;
+    int box_h = visible + 5;
+    int box_w = width < 74 ? width : 74;
+    int left = x + (width - box_w) / 2;
+    int y = top + (available - box_h) / 2;
+    frame(y, left, box_h, box_w, C_ACCENT, C_PANEL);
+    line_at(y + 1, left + 2, box_w - 4, "CHATS  /  ~/adam-ai/chats", C_ACCENT, true);
+    if (!a->saved_chat_count) {
+        line_at(y + 2, left + 3, box_w - 6,
+                "No saved conversations. Send a message to create one.",
+                C_MUTED, false);
+    } else {
+        int start = a->saved_chat_index - visible + 1;
+        if (start < 0) start = 0;
+        for (int row = 0; row < visible; ++row) {
+            int index = start + row;
+            if ((size_t)index >= a->saved_chat_count) break;
+            const AdamStoredChat *item = &a->saved_chats[index];
+            bool current = strcmp(item->id, a->active_chat.id) == 0;
+            bool selected = index == a->saved_chat_index;
+            int color = selected ? C_SELECT : C_PANEL;
+            if (selected) fill_span(y + 2 + row, left + 1, box_w - 2, C_SELECT);
+            char description[ADAM_CHAT_TITLE_SIZE + 12];
+            snprintf(description, sizeof(description), "%s%s",
+                     current ? "* " : "  ", item->title[0] ? item->title : "New chat");
+            line_at(y + 2 + row, left + 2, box_w - 18, description, color, selected);
+            char when[20] = "";
+            struct tm tm;
+            if (localtime_r(&item->updated_at, &tm))
+                strftime(when, sizeof(when), "%d.%m %H:%M", &tm);
+            line_at(y + 2 + row, left + box_w - 15, 13, when, color, false);
+        }
+    }
+    line_at(y + box_h - 2, left + 2, box_w - 4,
+            a->confirm_delete ? "Delete selected chat?  Y confirm  N/Esc cancel" :
+            "Enter open  ·  D delete  ·  Esc close  ·  Ctrl+L new",
+            a->confirm_delete ? C_WARNING : C_MUTED, false);
 }
 
 /* The editor and cursor use the exact same word-aware layout.  Without a
@@ -609,14 +667,16 @@ static void draw(App *a) {
     if (sidebar) draw_sidebar(a, content_right, top, h - top - 1);
     int cy = composer_top + 1, cx_cursor = cx + 4;
     draw_composer(a, editor_cells, cx, composer_top, cw, edit_rows, &cy, &cx_cursor);
-    if (!a->help_open) draw_palette(a, cx, composer_top, cw);
-    if (a->help_open) draw_help(cx, cw, 2, composer_top + 4);
+    if (!a->help_open && !a->chats_open) draw_palette(a, cx, composer_top, cw);
+    if (a->help_open && !a->chats_open) draw_help(cx, cw, 2, composer_top + 4);
+    if (a->chats_open) draw_chats(a, cx, top, cw, available);
     fill_span(h - 1, 0, w, C_NORMAL);
     char footer[384];
-    snprintf(footer, sizeof(footer), " Chat %02u  ·  %zu messages  ·  %s  ·  %s", a->session,
-             a->chat.count, a->busy ? "Streaming" : "Ready", a->status);
+    snprintf(footer, sizeof(footer), " %.65s  ·  %zu messages  ·  %s  ·  %s",
+             a->active_chat.title, a->chat.count,
+             a->busy ? "Streaming" : (a->dirty ? "Unsaved" : "Saved"), a->status);
     line_at(h - 1, 2, w - 4, footer, a->saw_error ? C_ERROR : C_MUTED, false);
-    if (a->help_open) { curs_set(0); }
+    if (a->help_open || a->chats_open) { curs_set(0); }
     else {
         curs_set(1);
         move(clamp_int(cy, 0, h - 1), clamp_int(cx_cursor, 0, w - 1));
@@ -660,13 +720,122 @@ static void history_move(App *a, int direction) {
     input_set(a, next == -1 ? a->draft : a->history[a->history_count - 1 - (size_t)next]);
 }
 
-static void new_chat(App *a) {
-    if (a->busy) { set_status(a, "Cancel generation first (Ctrl+C)"); return; }
+
+static void set_chat_title(AdamStoredChat *chat, const char *text) {
+    while (*text == ' ' || *text == '\t') ++text;
+    size_t n = strcspn(text, "\n\r");
+    if (n >= sizeof(chat->title)) n = sizeof(chat->title) - 1;
+    /* Do not truncate inside a multibyte UTF-8 code point. */
+    while (n && ((unsigned char)text[n] & 0xC0) == 0x80) --n;
+    if (!n) snprintf(chat->title, sizeof(chat->title), "%s", "New chat");
+    else {
+        memcpy(chat->title, text, n);
+        chat->title[n] = '\0';
+    }
+}
+
+static void refresh_saved_chats(App *a) {
+    a->saved_chat_count = a->store_ready ?
+        adam_chat_store_list(a->chat_directory, a->saved_chats, ADAM_CHAT_LIST_LIMIT) : 0;
+    if (a->saved_chat_index >= (int)a->saved_chat_count)
+        a->saved_chat_index = a->saved_chat_count ? (int)a->saved_chat_count - 1 : 0;
+}
+
+static bool save_current_chat(App *a) {
+    if (!a->dirty || !a->store_ready) return true;
+    snprintf(a->active_chat.model, sizeof(a->active_chat.model), "%s", a->model);
+    char error[200] = "";
+    /* Remember attempts as well, so disk errors do not cause 60-ms write loops. */
+    a->last_save = time(NULL);
+    if (!adam_chat_store_save(a->chat_directory, &a->active_chat, &a->chat,
+                              error, sizeof(error))) {
+        set_status(a, error[0] ? error : "Could not save chat");
+        return false;
+    }
+    a->dirty = false;
+    return true;
+}
+
+static void init_empty_chat(App *a) {
     adam_chat_clear(&a->chat);
-    ++a->session;
+    memset(&a->active_chat, 0, sizeof(a->active_chat));
+    if (!adam_chat_store_new_id(a->active_chat.id))
+        snprintf(a->active_chat.id, sizeof(a->active_chat.id), "chat-%ld-%ld",
+                 (long)time(NULL), (long)getpid());
+    snprintf(a->active_chat.title, sizeof(a->active_chat.title), "%s", "New chat");
+    snprintf(a->active_chat.model, sizeof(a->active_chat.model), "%s", a->model);
+    a->dirty = false;
     a->scroll = 0;
     a->saw_error = false;
-    set_status(a, "New conversation");
+    ++a->session;
+}
+
+static bool load_saved_chat(App *a, const char *id) {
+    if (a->busy) { set_status(a, "Stop generation before switching chats"); return false; }
+    if (!save_current_chat(a)) return false;
+    AdamChat loaded;
+    adam_chat_init(&loaded);
+    AdamStoredChat info = {0};
+    char error[200] = "";
+    if (!adam_chat_store_load(a->chat_directory, id, &info, &loaded,
+                              error, sizeof(error))) {
+        set_status(a, error[0] ? error : "Cannot open chat");
+        adam_chat_clear(&loaded);
+        return false;
+    }
+    adam_chat_clear(&a->chat);
+    a->chat = loaded;
+    a->active_chat = info;
+    if (info.model[0]) snprintf(a->model, sizeof(a->model), "%s", info.model);
+    a->dirty = false;
+    a->chats_open = false;
+    a->confirm_delete = false;
+    a->scroll = 0;
+    a->saw_error = false;
+    ++a->session;
+    input_set(a, L"");
+    set_status(a, "Chat restored from disk");
+    return true;
+}
+
+static void browse_chats(App *a) {
+    if (a->busy) { set_status(a, "Stop generation before browsing chats"); return; }
+    if (!a->store_ready) { set_status(a, "Chat storage is unavailable"); return; }
+    if (!save_current_chat(a)) return;
+    refresh_saved_chats(a);
+    a->saved_chat_index = 0;
+    for (size_t i = 0; i < a->saved_chat_count; ++i)
+        if (!strcmp(a->saved_chats[i].id, a->active_chat.id))
+            a->saved_chat_index = (int)i;
+    a->chats_open = true;
+    a->help_open = false;
+    a->confirm_delete = false;
+}
+
+static void delete_selected_chat(App *a) {
+    if (!a->saved_chat_count) return;
+    AdamStoredChat item = a->saved_chats[a->saved_chat_index];
+    char error[200] = "";
+    if (!adam_chat_store_delete(a->chat_directory, item.id, error, sizeof(error))) {
+        set_status(a, error[0] ? error : "Cannot delete chat");
+        return;
+    }
+    if (!strcmp(item.id, a->active_chat.id)) {
+        init_empty_chat(a);
+        input_set(a, L"");
+    }
+    a->confirm_delete = false;
+    refresh_saved_chats(a);
+    set_status(a, "Chat deleted");
+}
+
+static void new_chat(App *a) {
+    if (a->busy) { set_status(a, "Cancel generation first (Ctrl+C)"); return; }
+    if (!save_current_chat(a)) return;
+    init_empty_chat(a);
+    input_set(a, L"");
+    a->chats_open = false;
+    set_status(a, "New chat");
 }
 
 static void show_help_message(App *a) {
@@ -677,6 +846,28 @@ static void show_help_message(App *a) {
 static void command(App *a, const char *input) {
     if (!strcmp(input, "/quit") || !strcmp(input, "/exit")) { a->running = false; return; }
     if (!strcmp(input, "/new") || !strcmp(input, "/clear")) { new_chat(a); return; }
+    if (!strcmp(input, "/chats")) { browse_chats(a); return; }
+    if (!strcmp(input, "/save")) {
+        if (!a->chat.count && !a->dirty) a->dirty = true;
+        if (save_current_chat(a)) set_status(a, "Chat saved");
+        return;
+    }
+    if (!strcmp(input, "/rename")) {
+        input_set(a, L"/rename ");
+        set_status(a, "Enter a new chat title");
+        return;
+    }
+    if (!strncmp(input, "/rename ", 8) && input[8]) {
+        set_chat_title(&a->active_chat, input + 8);
+        a->dirty = true;
+        if (save_current_chat(a)) set_status(a, "Chat renamed");
+        return;
+    }
+    if (!strcmp(input, "/delete")) {
+        browse_chats(a);
+        if (a->chats_open && a->saved_chat_count) a->confirm_delete = true;
+        return;
+    }
     if (!strcmp(input, "/help")) { show_help_message(a); return; }
     if (!strcmp(input, "/thinking")) {
         a->show_thinking = !a->show_thinking;
@@ -707,9 +898,13 @@ static void command(App *a, const char *input) {
     }
     if (!strncmp(input, "/model ", 7) && input[7]) {
         if (a->busy) { set_status(a, "Cancel generation before switching model"); return; }
-        snprintf(a->model, sizeof(a->model), "%s", input + 7);
+        char next_model[MODEL_CAP];
+        snprintf(next_model, sizeof(next_model), "%s", input + 7);
+        if (!save_current_chat(a)) return;
         new_chat(a);
-        set_status(a, "Model changed (new conversation)");
+        snprintf(a->model, sizeof(a->model), "%s", next_model);
+        snprintf(a->active_chat.model, sizeof(a->active_chat.model), "%s", a->model);
+        set_status(a, "Model changed (new chat)");
         return;
     }
     set_status(a, "Unknown command; press Ctrl+P to browse");
@@ -734,12 +929,18 @@ static void submit(App *a) {
     if (!adam_chat_add(&a->chat, ADAM_ROLE_USER, text)) {
         set_status(a, "Could not append message"); free(text); return;
     }
+    if (a->chat.count == 1) set_chat_title(&a->active_chat, text);
     free(text);
+    a->dirty = true;
     if (!adam_chat_add(&a->chat, ADAM_ROLE_ASSISTANT, "")) {
+        (void)save_current_chat(a);
         set_status(a, "Out of memory"); return;
     }
+    (void)save_current_chat(a); /* Save the prompt BEFORE starting inference. */
     if (!adam_ollama_start(&a->stream, &a->chat, a->model, a->endpoint, a->think_level)) {
         adam_text_append(&a->chat.items[a->chat.count - 1].content, "Could not launch model request.");
+        a->dirty = true;
+        (void)save_current_chat(a);
         set_status(a, "Could not launch request");
         a->saw_error = true;
         return;
@@ -756,10 +957,12 @@ static void process_stream(App *a) {
         switch (event->type) {
             case ADAM_STREAM_THINKING:
                 adam_text_append(&m->thinking, event->text);
+                a->dirty = true;
                 set_status(a, "Reasoning...");
                 break;
             case ADAM_STREAM_TEXT:
                 adam_text_append(&m->content, event->text);
+                a->dirty = true;
                 set_status(a, "Writing response...");
                 break;
             case ADAM_STREAM_ERROR:
@@ -767,11 +970,13 @@ static void process_stream(App *a) {
                 adam_text_append(&m->content, "[Error] ");
                 adam_text_append(&m->content, event->text ? event->text : "Unknown network error");
                 a->saw_error = true;
+                a->dirty = true;
                 set_status(a, "Request failed");
                 break;
             case ADAM_STREAM_DONE:
                 a->busy = false;
                 if (!a->saw_error) set_status(a, "Response complete");
+                (void)save_current_chat(a);
                 break;
         }
         free(event->text);
@@ -787,6 +992,8 @@ static void cancel_stream(App *a) {
     a->busy = false;
     AdamMessage *m = &a->chat.items[a->chat.count - 1];
     adam_text_append(&m->content, "\n[Generation cancelled]");
+    a->dirty = true;
+    (void)save_current_chat(a);
     set_status(a, "Generation cancelled");
 }
 
@@ -824,6 +1031,44 @@ static void palette_enter(App *a) {
 }
 
 static void input_key(App *a, wint_t key, bool special) {
+    if (a->chats_open) {
+        if (special) {
+            switch (key) {
+                case KEY_UP:
+                    if (a->saved_chat_index > 0) --a->saved_chat_index;
+                    a->confirm_delete = false;
+                    break;
+                case KEY_DOWN:
+                    if ((size_t)(a->saved_chat_index + 1) < a->saved_chat_count)
+                        ++a->saved_chat_index;
+                    a->confirm_delete = false;
+                    break;
+                case KEY_ENTER:
+                    if (!a->confirm_delete && a->saved_chat_count)
+                        (void)load_saved_chat(a, a->saved_chats[a->saved_chat_index].id);
+                    break;
+                case KEY_DC:
+                    if (a->saved_chat_count) a->confirm_delete = true;
+                    break;
+                default: break;
+            }
+        } else {
+            if (a->confirm_delete) {
+                if (key == L'y' || key == L'Y') delete_selected_chat(a);
+                else if (key == 27 || key == L'n' || key == L'N') a->confirm_delete = false;
+            } else if (key == 27 || key == 11) {
+                a->chats_open = false;
+            } else if (key == L'd' || key == L'D') {
+                if (a->saved_chat_count) a->confirm_delete = true;
+            } else if (key == L'\n' || key == L'\r') {
+                if (a->saved_chat_count)
+                    (void)load_saved_chat(a, a->saved_chats[a->saved_chat_index].id);
+            } else if (key == 12) {
+                new_chat(a);
+            }
+        }
+        return;
+    }
     if (a->help_open) {
         if (key == 27 || (special && key == KEY_F(1)) || key == 13) a->help_open = false;
         return;
@@ -894,6 +1139,7 @@ static void input_key(App *a, wint_t key, bool special) {
             else set_status(a, "Clear input to use command palette");
             break;
         case 12: new_chat(a); break; /* Ctrl+L */
+        case 11: browse_chats(a); break; /* Ctrl+K */
         case 15: insert_char(a, L'\n'); break; /* Ctrl+O */
         case 21: input_set(a, L""); break; /* Ctrl+U */
         case 1: a->cursor = 0; break;
@@ -916,7 +1162,7 @@ int adam_tui_run(void) {
     app.running = true;
     app.show_thinking = false;
     app.sidebar_open = true;
-    app.session = 1;
+    app.session = 0;
     app.history_index = -1;
     const char *model = getenv("ADAM_MODEL");
     snprintf(app.model, sizeof(app.model), "%s", model && *model ? model : "gpt-oss:20b");
@@ -926,7 +1172,19 @@ int adam_tui_run(void) {
     if (!app.think_level || !*app.think_level) app.think_level = "medium";
     const char *theme = getenv("ADAM_TUI_THEME");
     app.light_theme = theme && !strcmp(theme, "light");
-    set_status(&app, "Type /help or press Ctrl+P");
+    set_status(&app, "Type /chats or press Ctrl+K to browse chats");
+    char storage_error[200] = "";
+    app.store_ready = adam_chat_store_init(app.chat_directory, sizeof(app.chat_directory),
+                                          storage_error, sizeof(storage_error));
+    if (app.store_ready) {
+        refresh_saved_chats(&app);
+        if (!app.saved_chat_count ||
+            !load_saved_chat(&app, app.saved_chats[0].id))
+            init_empty_chat(&app);
+    } else {
+        init_empty_chat(&app);
+        set_status(&app, storage_error[0] ? storage_error : "Chat storage unavailable");
+    }
     if (curl_global_init(CURL_GLOBAL_DEFAULT) != CURLE_OK) {
         fprintf(stderr, "Could not initialize libcurl\n"); return 1;
     }
@@ -942,12 +1200,15 @@ int adam_tui_run(void) {
 #endif
     while (app.running) {
         process_stream(&app);
+        if (app.dirty && time(NULL) - app.last_save >= 2)
+            (void)save_current_chat(&app); /* Periodic checkpoint during streaming. */
         draw(&app);
         wint_t key;
         int result = get_wch(&key);
         if (result != ERR) input_key(&app, key, result == KEY_CODE_YES);
     }
     cancel_stream(&app);
+    (void)save_current_chat(&app);
     endwin();
     for (size_t i = 0; i < app.history_count; ++i) free(app.history[i]);
     free(app.draft);

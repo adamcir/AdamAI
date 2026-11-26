@@ -44,6 +44,8 @@ Features:
 - Compact, auto-expanding Unicode composer (1–5 visible rows); `Ctrl+O` inserts a newline, `Enter` sends.
 - Slash-command palette (`/` or `Ctrl+P`), F1 shortcut help, prompt history.
 - Optional workspace sidebar (`Ctrl+B`) and dark/light themes (`/theme`).
+- **Persistent conversations:** auto-save to `~/adam-ai/chats/*.json`, restart recovery,
+  chat picker (`Ctrl+K` / `/chats`), rename, manual save and confirmed deletion.
 - Asynchronous Ollama API client, cancellation, scrollback and status indicators.
 
 ### Linux dependencies
@@ -89,9 +91,30 @@ For key bindings, architecture and limitations see [docs/TUI.md](docs/TUI.md).
 ### Current limitations
 
 This preview contains **chat and terminal UI only**. Agent tool execution,
-filesystem operations, web browsing and session persistence are not yet present.
+filesystem operations and web browsing are not yet present. Chat histories are
+stored locally in your home directory (not sent to GitHub).
 Do not confuse the application's local *workspace label* with filesystem access.
 
 ## License
 
 GNU GPL-3.0-only. See [LICENSE](LICENSE).
+
+### Saved chats
+
+AdamAI automatically creates `~/adam-ai/chats/` with private directory permissions.
+Each conversation is stored in its own UTF-8 JSON file (including the selected model
+and reasoning output). A write is first committed to a private temporary file and
+atomically renamed, so interrupted writes do not truncate the previous save.
+
+- `Ctrl+K` or `/chats`: browse chats, arrows to select, Enter to open, D to delete
+  (confirmation with Y), Esc to close.
+- `Ctrl+L` or `/new`: new chat; the previous chat remains saved.
+- `/rename TITLE`: rename the current chat.
+- `/save`: force a save.
+- `/delete`: open the deletion confirmation for the current chat.
+
+The most recently modified chat is restored when AdamAI starts. Saving happens
+after the prompt, periodically during streaming and when a response ends, is
+cancelled, or the program exits normally. A power loss can still lose the very
+last streamed characters. The initial empty chat is saved only once used or when
+`/save` is requested. No automatic cloud sync is performed.
