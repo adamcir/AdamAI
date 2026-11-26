@@ -6,7 +6,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include <unistd.h>
+#include <time.h>
 int main(int argc, char **argv) {
     assert(argc == 2);
     char endpoint[128];
@@ -26,7 +26,10 @@ int main(int argc, char **argv) {
             if (ev->type==ADAM_STREAM_DONE) ++done;
             free(ev->text);free(ev);
         }
-        if(!done) usleep(10000);
+        if (!done) {
+            const struct timespec delay = {.tv_sec = 0, .tv_nsec = 10000000L};
+            nanosleep(&delay, NULL);
+        }
     }
     adam_ollama_stop(&stream);adam_chat_clear(&chat);curl_global_cleanup();
     assert(tool>=1);assert(txt==1);assert(err==0);assert(done==1);
