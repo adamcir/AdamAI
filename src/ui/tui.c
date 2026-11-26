@@ -517,7 +517,7 @@ static void draw_help(int x, int width, int top, int available) {
         "Ctrl+A/E/U    Start / end / clear input",
         "F1            Show or hide shortcuts",
         "",
-        "No agent tools yet: commands cannot change files."
+        "FS /fs on: read project; write requires user approval. No shell tools."
     };
     size_t count = sizeof(rows) / sizeof(rows[0]);
     for (size_t i = 0; i < count && (int)i < h - 4; ++i)

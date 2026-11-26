@@ -30,6 +30,10 @@ int main(int argc, char **argv) {
                 assert(ev->text);
                 assert(strstr(ev->text,"Target: note.txt"));
                 assert(strstr(ev->text,"updated by AdamAI"));
+                /* The agent must not have changed the file before approval. */
+                FILE *before=fopen(path,"rb");assert(before);
+                char original[80]={0};assert(fgets(original,sizeof(original),before));
+                assert(!fclose(before));assert(!strcmp(original,"original\n"));
                 assert(adam_ollama_answer_approval(&stream,true));
                 ++approved;
             }
