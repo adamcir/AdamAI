@@ -1,21 +1,48 @@
 # Adam AI
 
-Local AI assistant for Adava Development. Written in C17.
+**Adam AI** is a local AI assistant for Adava Development, written in C17.
+
+Its first user interface is a native **ncursesw terminal chat** with an original
+conversation-first layout inspired by OpenCode, Codex CLI, and Claude Code.
+It is **not** a fork of those applications and does not include their source code.
 
 ## TUI preview (0.1.0-dev)
 
-The first interface is an original **ncursesw** terminal application inspired by
-OpenCode's conversation-centered workflow. This is not a fork of OpenCode and
-contains no OpenCode source code.
+```text
+ ◆  ADAM AI                           gpt-oss:20b   ● Local
+ WORKSPACE / ~/Projects/WORLD-Game
+ ─────────────────────────────────────────────────────────
+
+                   ◆  ADAM AI
+             Your local development assistant
+
+  ┃ YOU
+  ┃ Help me fix the renderer in WORLD.
+  ┃
+
+  ◆  ADAM AI
+    ▸ Thinking · Ctrl+T to expand
+    First, I would review the existing Vulkan code ...
+
+ ┌ MESSAGE ──────────────────────────────────────────────┐
+ │ Enter to send    Ctrl+O newline                      │
+ │  Ask Adam AI, or type / for commands...               │
+ │                                                       │
+ └───────────────────────────────────────────────────────┘
+ Ctrl+P commands · Ctrl+B sidebar · F1 shortcuts
+```
+
+This text is an approximate layout, not a screenshot. The actual interface
+adapts to terminal width and height and displays a right sidebar on wide terminals.
 
 Features:
 
-- A responsive conversation view and optional model/session sidebar.
-- Real-time streaming of the assistant answer and available reasoning output.
-- Editable Unicode message composer, scrollback and command shortcuts.
-- Persistent in-memory conversation context within the current session.
-- Asynchronous Ollama API client; terminal remains responsive while generating.
-- Terminal size handling, UTF-8 input, errors and cancellation.
+- Streamed answers, with separately collapsible reasoning when a model provides it.
+- Centered transcript, user panels, simple Markdown blocks and fenced code panels.
+- Three-line Unicode composer; `Ctrl+O` inserts a newline, `Enter` sends.
+- Slash-command palette (`/` or `Ctrl+P`), F1 shortcut help, prompt history.
+- Optional workspace sidebar (`Ctrl+B`) and dark/light themes (`/theme`).
+- Asynchronous Ollama API client, cancellation, scrollback and status indicators.
 
 ### Linux dependencies
 
@@ -24,7 +51,7 @@ sudo apt install build-essential cmake ninja-build \
   libncurses-dev libcurl4-openssl-dev libjson-c-dev pkg-config
 ```
 
-### Build
+### Build and test
 
 ```bash
 cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Debug
@@ -48,36 +75,21 @@ ollama pull qwen3:8b
 ADAM_MODEL=qwen3:8b ADAM_THINK=true ./build/AdamAI
 ```
 
-Configuration (environment variables):
-
-| Variable | Default | Description |
-| --- | --- | --- |
+| Environment variable | Default | Description |
+|---|---|---|
 | `ADAM_MODEL` | `gpt-oss:20b` | Ollama model name |
-| `ADAM_OLLAMA_URL` | `http://127.0.0.1:11434` | Ollama endpoint, without `/api/chat` |
-| `ADAM_THINK` | `medium` | `low`, `medium`, `high`, `true`, or `off`, depending on model |
+| `ADAM_OLLAMA_URL` | `http://127.0.0.1:11434` | Local Ollama endpoint |
+| `ADAM_THINK` | `medium` | `low`, `medium`, `high`, `true` or `off`, model-dependent |
+| `ADAM_TUI_THEME` | `dark` | `dark` or `light` |
 
-### Keyboard and commands
-
-| Shortcut | Action |
-| --- | --- |
-| Enter | Send a message |
-| Ctrl+T | Show/hide model reasoning output |
-| Ctrl+L | New conversation (while idle) |
-| Ctrl+C | Cancel current request |
-| Ctrl+Q | Exit |
-| PgUp/PgDn | Scroll conversation |
-| Left/Right, Home/End, Backspace/Delete | Edit composer |
-| Ctrl+A / Ctrl+E / Ctrl+U | Start/end/clear composer |
-
-Commands: `/help`, `/clear`, `/new`, `/thinking`, `/model NAME`, `/quit`.
+For key bindings, architecture and limitations see [docs/TUI.md](docs/TUI.md).
 
 ### Current limitations
 
-This version implements **chat and TUI**, not a computer-control agent.
-It does not run shell commands, modify files, browse websites or persist sessions.
-Thinking text is displayed only when the chosen model/provider exposes it.
-`/model` starts a new conversation because models may use incompatible context.
+This preview contains **chat and terminal UI only**. Agent tool execution,
+filesystem operations, web browsing and session persistence are not yet present.
+Do not confuse the application's local *workspace label* with filesystem access.
 
 ## License
 
-GNU GPL-3.0-only. See LICENSE.
+GNU GPL-3.0-only. See [LICENSE](LICENSE).
