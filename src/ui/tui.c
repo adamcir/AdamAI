@@ -419,8 +419,11 @@ static void draw_sidebar(const App *a, int left, int top, int height) {
 static void draw_welcome(const App *a, int x, int y, int width, int height) {
     int mid = y + height / 2;
     if (height < 10) {
-        line_at(y + 1, x + 2, width - 4, "◆  AdamAI", C_ACCENT, true);
-        line_at(y + 3, x + 2, width - 4, "Ask anything.  /help  ·  Ctrl+P", C_MUTED, false);
+        /* Respect the inner viewport when the terminal is short. */
+        line_at(y, x + 2, width - 4, "◆  AdamAI", C_ACCENT, true);
+        if (height > 2)
+            line_at(y + 2, x + 2, width - 4,
+                    "Ask anything.  /help  ·  Ctrl+P", C_MUTED, false);
         return;
     }
     const char *title = "◆  AdamAI";
@@ -620,7 +623,14 @@ static void draw(App *a) {
                                                cw - 7, editor_cells);
     int edit_rows = clamp_int(editor_total_rows, 1, MAX_EDITOR_ROWS);
     int composer_top = h - edit_rows - 4;
-    int available = composer_top - top;
+
+    /* The conversation is a separate orange-framed viewport.
+     * Keep the composer below it, separated by one empty terminal row.
+     * The message renderer only ever writes inside the inner rectangle. */
+    const int chat_x = cx + 2;
+    const int chat_y = top + 1;
+    const int chat_w = cw - 4;
+    const int chat_h = composer_top - top - 3;
     fill_span(0, 0, w, C_NORMAL);
     line_at(0, 2, content_right - 4, "◆  AdamAI", C_ACCENT, true);
     char right[192];
@@ -634,33 +644,39 @@ static void draw(App *a) {
     snprintf(work, sizeof(work), "WORKSPACE  /  %.200s", cwd);
     line_at(1, cx, cw, work, C_MUTED, false);
     horizontal(2, 0, content_right, C_FRAME);
+
+    /* Orange frame surrounds the entire transcript, not the welcome text alone. */
+    frame(top, cx, chat_h + 2, cw, C_WARNING, C_NORMAL);
+    line_at(top, cx + 3, cw - 6, " CHAT ", C_WARNING, true);
+
     if (!a->chat.count) {
-        draw_welcome(a, cx, top, cw, available);
+        draw_welcome(a, chat_x, chat_y, chat_w, chat_h);
     } else {
         View lines = {0};
-        build_view(&lines, a, cw);
-        int max_scroll = lines.count > (size_t)available ? (int)lines.count - available : 0;
+        build_view(&lines, a, chat_w);
+        int max_scroll = lines.count > (size_t)chat_h ? (int)lines.count - chat_h : 0;
         a->scroll = clamp_int(a->scroll, 0, max_scroll);
-        int start = (int)lines.count - available - a->scroll;
+        int start = (int)lines.count - chat_h - a->scroll;
         if (start < 0) start = 0;
-        for (int row = 0; row < available; ++row) {
+        for (int row = 0; row < chat_h; ++row) {
             size_t idx = (size_t)start + (size_t)row;
             if (idx >= lines.count) break;
             const ViewLine *line = &lines.data[idx];
-            int y = top + row;
+            int y = chat_y + row;
             if (line->panel) {
-                fill_span(y, cx, cw, C_PANEL);
+                fill_span(y, chat_x, chat_w, C_PANEL);
                 attrs(C_ACCENT, false);
-                mvaddch(y, cx, ACS_VLINE);
+                mvaddch(y, chat_x, ACS_VLINE);
                 attrs(C_NORMAL, false);
             }
-            wline_at(y, cx + line->indent, cw - line->indent - 1,
+            wline_at(y, chat_x + line->indent, chat_w - line->indent - 1,
                      line->text, line->color, line->bold);
         }
         if (a->scroll > 0) {
+            /* Scroll indicator sits in the top border instead of obscuring text. */
             char label[32];
             snprintf(label, sizeof(label), "↑ %d lines", a->scroll);
-            line_at(top, cx + cw - 14, 14, label, C_WARNING, false);
+            line_at(top, cx + cw - 17, 15, label, C_WARNING, false);
         }
         free_view(&lines);
     }
@@ -669,7 +685,7 @@ static void draw(App *a) {
     draw_composer(a, editor_cells, cx, composer_top, cw, edit_rows, &cy, &cx_cursor);
     if (!a->help_open && !a->chats_open) draw_palette(a, cx, composer_top, cw);
     if (a->help_open && !a->chats_open) draw_help(cx, cw, 2, composer_top + 4);
-    if (a->chats_open) draw_chats(a, cx, top, cw, available);
+    if (a->chats_open) draw_chats(a, chat_x, chat_y, chat_w, chat_h);
     fill_span(h - 1, 0, w, C_NORMAL);
     char footer[384];
     snprintf(footer, sizeof(footer), " %.65s  ·  %zu messages  ·  %s  ·  %s",
