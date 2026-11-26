@@ -385,7 +385,8 @@ static void cwd_short(char *out, size_t size) {
 static void draw_sidebar(const App *a, int left, int top, int height) {
     if (height < 10) return;
     int inner = left + 2, width = COLS - inner - 2;
-    attrs(C_FRAME, false);
+    /* The sidebar divider shares the workspace's orange border. */
+    attrs(C_WARNING, false);
     mvvline(top, left, ACS_VLINE, height);
     attrs(C_NORMAL, false);
     line_at(top, inner, width, "PROJECT", C_ACCENT, true);
@@ -617,20 +618,18 @@ static void draw(App *a) {
     int cw = content_right - 8;
     if (cw > MAX_CHAT_WIDTH) cw = MAX_CHAT_WIDTH;
     int cx = (content_right - cw) / 2;
-    int top = 3;
+    const int pane_top = 3;
     AdamEditorCell editor_cells[INPUT_CAP + 1];
     int editor_total_rows = adam_editor_layout(a->input, a->input_len,
                                                cw - 7, editor_cells);
     int edit_rows = clamp_int(editor_total_rows, 1, MAX_EDITOR_ROWS);
-    int composer_top = h - edit_rows - 4;
-
-    /* The conversation is a separate orange-framed viewport.
-     * Keep the composer below it, separated by one empty terminal row.
-     * The message renderer only ever writes inside the inner rectangle. */
-    const int chat_x = cx + 2;
-    const int chat_y = top + 1;
-    const int chat_w = cw - 4;
-    const int chat_h = composer_top - top - 3;
+    /* The orange outline belongs to the ENTIRE workspace, not the narrow
+     * centered transcript. The composer lives inside the same large panel. */
+    int composer_top = h - edit_rows - 5;
+    const int chat_x = cx;
+    const int chat_y = pane_top + 2;
+    const int chat_w = cw;
+    const int chat_h = composer_top - chat_y - 1;
     fill_span(0, 0, w, C_NORMAL);
     line_at(0, 2, content_right - 4, "◆  AdamAI", C_ACCENT, true);
     char right[192];
@@ -645,9 +644,17 @@ static void draw(App *a) {
     line_at(1, cx, cw, work, C_MUTED, false);
     horizontal(2, 0, content_right, C_FRAME);
 
-    /* Orange frame surrounds the entire transcript, not the welcome text alone. */
-    frame(top, cx, chat_h + 2, cw, C_WARNING, C_NORMAL);
-    line_at(top, cx + 3, cw - 6, " CHAT ", C_WARNING, true);
+    /* Full-width framed workspace, including chat, composer and sidebar.
+     * The green top bar and the footer stay outside this outline. */
+    frame(pane_top, 0, h - pane_top - 1, w, C_WARNING, C_NORMAL);
+    line_at(pane_top, 3, content_right - 5, " CHAT ", C_WARNING, true);
+    if (sidebar) {
+        attrs(C_WARNING, false);
+        mvvline(pane_top + 1, content_right, ACS_VLINE, h - pane_top - 3);
+        mvaddch(pane_top, content_right, ACS_TTEE);
+        mvaddch(h - 2, content_right, ACS_BTEE);
+        attrs(C_NORMAL, false);
+    }
 
     if (!a->chat.count) {
         draw_welcome(a, chat_x, chat_y, chat_w, chat_h);
@@ -673,14 +680,14 @@ static void draw(App *a) {
                      line->text, line->color, line->bold);
         }
         if (a->scroll > 0) {
-            /* Scroll indicator sits in the top border instead of obscuring text. */
+            /* Scroll indicator stays on the orange workspace border. */
             char label[32];
             snprintf(label, sizeof(label), "↑ %d lines", a->scroll);
-            line_at(top, cx + cw - 17, 15, label, C_WARNING, false);
+            line_at(pane_top, content_right - 18, 15, label, C_WARNING, false);
         }
         free_view(&lines);
     }
-    if (sidebar) draw_sidebar(a, content_right, top, h - top - 1);
+    if (sidebar) draw_sidebar(a, content_right, chat_y, h - chat_y - 2);
     int cy = composer_top + 1, cx_cursor = cx + 4;
     draw_composer(a, editor_cells, cx, composer_top, cw, edit_rows, &cy, &cx_cursor);
     if (!a->help_open && !a->chats_open) draw_palette(a, cx, composer_top, cw);
