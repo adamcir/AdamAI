@@ -11,6 +11,7 @@
 
 #define MAX_NDJSON_LINE (1024u * 1024u)
 #define MAX_HISTORY_MESSAGES 64
+#define MAX_TOOL_ROUNDS 6
 
 typedef struct {
     AdamStream *stream;
@@ -412,8 +413,8 @@ static int progress_check(void *userdata, curl_off_t dltotal, curl_off_t dlnow,
 
 static void *stream_worker(void *arg) {
     AdamStream *s = arg;
-    /* Up to 3 model turns, 2 tool-call rounds. Prevent infinite tool loops. */
-    for (int turn = 0; turn < 3 && !atomic_load(&s->cancelled); ++turn) {
+    /* Bounded multi-step agent: workspace approval, inspection, edit, etc. */
+    for (int turn = 0; turn <= MAX_TOOL_ROUNDS && !atomic_load(&s->cancelled); ++turn) {
         Receiver r = {.stream = s};
         CURL *curl = curl_easy_init();
         if (!curl) {
@@ -461,7 +462,7 @@ static void *stream_worker(void *arg) {
             if (r.calls) json_object_put(r.calls);
             break;
         }
-        if (turn >= 2) {
+        if (turn >= MAX_TOOL_ROUNDS) {
             enqueue(ADAM_STREAM_ERROR,"Tool-call limit reached",s);
             json_object_put(r.calls);
             break;

@@ -148,7 +148,7 @@ The web tool only reads text, HTML or JSON over verified **HTTPS** on port 443.
 It rejects private/reserved destination IPs (including after DNS resolution),
 does not follow redirects, uses no proxies or local credentials, and limits
 downloads to 512 KiB, extracted text to 12,000 bytes, and requests to 20 seconds.
-At most two tool-call rounds occur per AI response. JavaScript-driven sites,
+At most six tool-call rounds occur per AI response. JavaScript-driven sites,
 search queries, login-required pages, binary files and redirected URLs are not
 yet supported. Web content is untrusted and may contain errors or instructions;
 AdamAI forwards it as reference data, not as instructions to follow.

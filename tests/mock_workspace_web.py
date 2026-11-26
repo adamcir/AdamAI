@@ -26,11 +26,16 @@ class Handler(BaseHTTPRequestHandler):
         elif len(results)==1:
             assert "User approved workspace change" in results[0]["content"], results
             reply={"message":{"role":"assistant","tool_calls":[{
+                "type":"function","function":{"name":"read_file",
+                "arguments":{"path":"note.txt"}}}]},"done":False}
+        elif len(results)==2:
+            assert "workspace-marker" in results[1]["content"], results
+            reply={"message":{"role":"assistant","tool_calls":[{
                 "type":"function","function":{"name":"web_fetch",
                 "arguments":{"url":"https://example.com/?private=do-not-send"}}}]},"done":False}
         else:
-            assert len(results)==2,results
-            assert "Web request rejected by user" in results[1]["content"], results
+            assert len(results)==3,results
+            assert "Web request rejected by user" in results[2]["content"], results
             reply={"message":{"role":"assistant","content":"This is my final answer"},"done":False}
         raw=(json.dumps(reply)+"\n"+json.dumps({"done":True})+"\n").encode()
         self.send_response(200)
@@ -49,6 +54,7 @@ if __name__=="__main__":
         import os
         with tempfile.TemporaryDirectory(prefix="adamai-mock-workspace-") as root:
             TARGET=str(Path(root))
+            (Path(root)/"note.txt").write_text("workspace-marker\n",encoding="utf-8")
             subprocess.run([sys.argv[1],str(server.server_port),TARGET],check=True,timeout=20)
     finally:
         server.shutdown()
