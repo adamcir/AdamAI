@@ -575,7 +575,7 @@ bool adam_tools_execute(const char *name,struct json_object *args,AdamToolContex
   return search(ctx,arg_string(args,key),false,output,error,cap);
  }
  if(!strcmp(name,"project_index")){
-  Search q={.fs=ctx->fs,.needle="",.names_only=true};walk_search(&q,".",0);
+  Search q={.fs=ctx->fs,.needle=NULL,.names_only=true};walk_search(&q,".",0);
   char text[256];snprintf(text,sizeof(text),"Indexed/scanned %d visible files among %d entries (max depth 4, 512 entries).",q.files,q.seen);
   free(q.out);*output=duplicate(text);return *output!=NULL;
  }
@@ -643,8 +643,13 @@ bool adam_tools_execute(const char *name,struct json_object *args,AdamToolContex
  if(!strcmp(name,"format_code")){
   const char *path=arg_string(args,"path");
   if(!path||!adam_fs_valid_path(path,false)){fail(error,cap,"Invalid format target");return false;}
+  /* Check the file through the scoped FS layer before invoking any external
+   * formatter. Run it only after user permission (not a kernel sandbox). */
+  char *source=NULL;
+  if(!adam_fs_read(ctx->fs,path,&source,error,cap))return false;
+  free(source);
   const char *argv[]={"clang-format","--style=file",path,NULL};
-  return approved_run(ctx,argv,false,output,error,cap);
+  return approved_run(ctx,argv,true,output,error,cap);
  }
  if(!strcmp(name,"memory_search")||!strcmp(name,"memory_update"))
   return memory_op(ctx,name,args,output,error,cap);
