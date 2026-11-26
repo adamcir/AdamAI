@@ -593,7 +593,7 @@ int main(void) {
     atomic_init(&app.cancel, false);
     curl_global_init(CURL_GLOBAL_DEFAULT);
     initscr();
-    cbreak();
+    raw();  /* Receive Ctrl+C as a key rather than terminating on SIGINT. */
     noecho();
     keypad(stdscr, TRUE);
     timeout(70);
