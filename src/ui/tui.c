@@ -91,6 +91,7 @@ typedef struct {
     int scroll; /* wrapped lines above bottom */
     char status[256];
     char model[MODEL_CAP];
+    char preferred_model[MODEL_CAP];
     const char *endpoint, *think_level;
     unsigned spin;
     unsigned session;
@@ -908,6 +909,9 @@ static void delete_selected_chat(App *a) {
 static void new_chat(App *a) {
     if (a->busy) { set_status(a, "Cancel generation first (Ctrl+C)"); return; }
     if (!save_current_chat(a)) return;
+    /* Restoring an old chat may select its historical model; a NEW chat
+     * defaults to adam1 (or the user-selected /model preference). */
+    snprintf(a->model,sizeof(a->model),"%s",a->preferred_model);
     init_empty_chat(a);
     input_set(a, L"");
     a->chats_open = false;
@@ -1077,6 +1081,7 @@ static void command(App *a, const char *input) {
         snprintf(next_model, sizeof(next_model), "%s", input + 7);
         if (!save_current_chat(a)) return;
         new_chat(a);
+        snprintf(a->preferred_model,sizeof(a->preferred_model),"%s",next_model);
         snprintf(a->model, sizeof(a->model), "%s", next_model);
         snprintf(a->active_chat.model, sizeof(a->active_chat.model), "%s", a->model);
         set_status(a, "Model changed (new chat)");
@@ -1445,6 +1450,7 @@ int adam_tui_run(void) {
     app.history_index = -1;
     const char *model = getenv("ADAM_MODEL");
     snprintf(app.model, sizeof(app.model), "%s", model && *model ? model : "adam1");
+    snprintf(app.preferred_model,sizeof(app.preferred_model),"%s",app.model);
     app.endpoint = getenv("ADAM_OLLAMA_URL");
     if (!app.endpoint || !*app.endpoint) app.endpoint = "http://127.0.0.1:11434";
     app.think_level = getenv("ADAM_THINK");
