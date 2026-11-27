@@ -423,7 +423,9 @@ static void draw_sidebar(const App *a, int left, int top, int height) {
         line_at(top + 17, inner, width, "REASONING", C_THINK, true);
         line_at(top + 18, inner, width, a->show_thinking ? "Visible" : "Collapsed", C_NORMAL, false);
         line_at(top + 19, inner, width,
-                a->web_enabled ? "Web: enabled" : "Web: disabled",
+                a->web_enabled ?
+                    (getenv("ADAM_WEB_CONFIRM") ? "Web: ask" : "Web: auto") :
+                    "Web: disabled",
                 a->web_enabled ? C_GOOD : C_MUTED, false);
         if (height > 22)
             line_at(top + 20, inner, width,

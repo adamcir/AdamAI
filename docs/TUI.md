@@ -106,17 +106,18 @@ Saved chats survive a restart; the editable prompt history is process-local.
   on the existing worker thread, appends the `role:tool` result to the next
   Ollama request and streams the final response back to ncurses.
 - `/web on` / `/web off`: toggle tool availability for subsequent model turns.
-  `/web HTTPS_URL`: one-shot explicit web fetch. `ADAM_WEB_ENABLED=1`
-  enables web tools at process launch. Off by default.
+  `/web HTTPS_URL`: one-shot explicit web fetch. Web tools are enabled at
+  startup; `/web off` disables them, `/web auto` allows automatic reading,
+  and `/web ask` requests per-URL confirmation.
 - Protection against local network targets includes rejection of private and
-  loopback IPs even if a public DNS record resolves to one. No redirects, no
-  proxy, no local credentials, no POST, no filesystem access.
+  loopback IPs even if a public DNS record resolves to one. HTTPS redirects
+  are limited to three hops. No proxy, local credentials, POST or binary downloads.
 - `tests/test_web_fetch.c` checks URL/IP protections and HTML extraction.
   `tests/test_ollama_web_loop.c` with `tests/mock_ollama.py` checks the
   full two-turn Ollama tool protocol without calling the public Internet.
-- Limitations: no search engine, browser JavaScript, cookies/login, following
-  redirects, or automatic verification of what a page claims. Model-generated
-  tool calls are limited to two rounds per user turn. Some model builds cannot
+- Limitations: public HTML search may be blocked by search providers; no
+  browser JavaScript, cookies/login or automatic verification of page claims.
+  Model-generated tool calls are limited to twelve rounds per user turn. Some model builds cannot
   emit Ollama-compatible function calls; in that case use a supported model.
 
 ## Workspace filesystem agent tools (initial version)
@@ -134,14 +135,14 @@ Saved chats survive a restart; the editable prompt history is process-local.
   The complete proposal is scrollable, and denial is returned as a tool result.
   Writes use an atomic temporary-file rename with fsync.
 - Enable with `/fs on`, disable with `/fs off`, check with `/fs status`.
-  Default is off, or `ADAM_FS_ENABLED=1` at startup. Root defaults to
-  current working directory; `ADAM_FS_ROOT` can override it.
-- Security: the application never exposes both FS and outgoing web tools to
-  the model at the same time. Still, model output may contain contents read
-  from files, so do not feed a conversation with private data to a web-enabled
-  model session unless you explicitly accept that risk.
-- No execute_command, recursive search, globbing, applying patches, or Git
-  editing yet. The user must verify changes to files before approving.
+  Enabled by default; `ADAM_FS_ENABLED=0` disables it at startup. Root
+  defaults to current directory; `ADAM_FS_ROOT` can override it.
+- Security: FS and read-only public web tools may be active together. This can
+  expose file text through model-generated URLs or queries. For sensitive
+  projects, disable FS while browsing or choose `/web ask`.
+- Bounded search, terminal commands, exact-text patches and Git inspection
+  are available in the developer tool registry. File changes and process
+  execution still require explicit user approval.
 
 ## Default model, both tool modes and workspace approval
 
@@ -149,11 +150,10 @@ Saved chats survive a restart; the editable prompt history is process-local.
   conversation retains its previously selected model.
 - Web and FS tools start **enabled**, unless `ADAM_WEB_ENABLED=0` or
   `ADAM_FS_ENABLED=0` is set. Both can now be active in the same model turn.
-- With FS active, **every** outgoing `web_fetch` request is held behind a
-  scrollable Y/N modal displaying the full destination URL. No HTTP request
-  occurs before approval. In web-only mode, HTTPS requests need no extra modal.
-  This protects against unintended local-data exfiltration, but users must
-  inspect URLs carefully; it is not a full sandbox.
+- Public HTTPS requests run automatically by default, including when FS is
+  active. `/web ask` or `ADAM_WEB_CONFIRM=1` adds per-URL Y/N approval.
+  With both tool classes active, review the security implications; automatic
+  browsing is not a data-loss prevention sandbox.
 - `/workspace /absolute/project/path` or `Ctrl+W` requests access to an
   existing project folder. The dialog displays both old and new roots. Only Y
   changes the authorized root; N/Esc retains the previous workspace.
@@ -169,7 +169,7 @@ Saved chats survive a restart; the editable prompt history is process-local.
 ## C17 developer tool registry
 
 `src/agent/tool_registry.c` provides a separate JSON schema and dispatcher
-for 23 source, terminal, Git and system tools. `ollama.c` no longer needs
+for 32 source, terminal, Git, web and system tools. `ollama.c` no longer needs
 individual branches for new developer tools. Mutating file operations and
 process execution use the preexisting modal approval callback. All paths
 remain workspace-relative and do not follow symlinks for file operations.
@@ -193,9 +193,8 @@ require explicit Y/N approval and write to private local JSONL files under
 `web_search` uses a public HTML search interface and is best-effort;
 providers may reject automated requests. `http_request` is deliberately
 restricted to public HTTPS GET; it does not support POST or account
-credentials. GitHub API tools fetch only public data. A separate Y/N
-confirmation must approve each URL when called through the developer
-agent while FS is available.
+credentials. GitHub API tools fetch only public data. Outbound calls are
+automatic by default; `/web ask` restores per-URL confirmation.
 
 ## Automatic web browsing and Adam 1 model discovery
 

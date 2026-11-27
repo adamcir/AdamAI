@@ -77,6 +77,13 @@ if(BUILD_TESTING)
 
     find_package(Python3 COMPONENTS Interpreter QUIET)
     if(Python3_Interpreter_FOUND)
+        add_executable(adam_model_tags_http_test tests/test_model_tags_http.c)
+        target_link_libraries(adam_model_tags_http_test PRIVATE adam_core)
+        add_test(NAME ollama_tags_http
+                 COMMAND ${Python3_EXECUTABLE}
+                         ${CMAKE_CURRENT_SOURCE_DIR}/tests/mock_ollama_tags.py
+                         $<TARGET_FILE:adam_model_tags_http_test>)
+
         add_executable(adam_web_loop_test tests/test_ollama_web_loop.c)
         target_link_libraries(adam_web_loop_test PRIVATE adam_core)
         add_test(NAME ollama_web_tool_loop

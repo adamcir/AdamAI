@@ -161,9 +161,9 @@ It rejects private/reserved destination IPs (including after DNS resolution),
 follows up to 3 HTTPS-only redirects, uses no proxies or local credentials,
 extracts up to 24 browsable HTTPS links, and limits downloads to 512 KiB,
 text to 12,000 bytes, and requests to 20 seconds.
-At most six tool-call rounds occur per AI response. JavaScript-driven sites,
-search queries, login-required pages, binary files and redirected URLs are not
-yet supported. Web content is untrusted and may contain errors or instructions;
+At most twelve tool-call rounds occur per AI response. JavaScript-driven
+sites, login-required pages and binary files are not supported. Public web
+search is best-effort and may be blocked by automated-traffic protections. Web content is untrusted and may contain errors or instructions;
 AdamAI forwards it as reference data, not as instructions to follow.
 
 A browsing action happens in a background Ollama request worker; `Ctrl+C`
