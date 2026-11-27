@@ -249,3 +249,20 @@ automatic by default; `/web ask` restores per-URL confirmation.
   in `tests/test_text_selection.c`.
 - Mouse support depends on the terminal emulator; Shift+drag can still be
   used for the emulator's native selection.
+
+## Web browsing robustness and geocoding
+
+- `geo_search(query)` accepts plain UTF-8 place/address names, encodes via
+  `curl_easy_escape`, and queries Nominatim over the existing public HTTPS
+  network tool. Nominatim requests use the AdamAI User-Agent and a process-wide
+  one-query-per-second throttle; they require no account or API key.
+- Empty `[]` responses do **not** imply nonexistence of a location. The
+  model is advised to switch to `web_search` rather than guessing spelling.
+- Three consecutive identical tool-call batches are detected and stopped.
+  At the agent's tool round budget, the final request disables tools and
+  asks for a sourced response from existing evidence, not an error-only reply.
+- Progress updates live in the TUI status bar. Tool events are not inserted
+  into the assistant's message history as fake conversation text.
+- Tests: `geo_utf8_query` validates Czech accents in encoded Nominatim URLs;
+  `ollama_repeat_guard` uses a local fake Ollama API to check the final-only
+  fallback without accessing the public Internet.

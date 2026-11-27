@@ -10,6 +10,7 @@
 #include <fcntl.h>
 #include <sys/file.h>
 #include <poll.h>
+#include <pthread.h>
 #include <signal.h>
 #include <stdarg.h>
 #include <stdio.h>
@@ -59,6 +60,7 @@ static const Spec specs[]={
  {"memory_update","Save a user-approved note to ~/adam-ai/memory.jsonl.",PARAM1("note","Useful long-term note to retain")},
  {"task_manager","Add, finish or list tasks saved in ~/adam-ai/tasks.jsonl.","{\"type\":\"object\",\"required\":[\"action\"],\"properties\":{\"action\":{\"type\":\"string\",\"enum\":[\"add\",\"done\",\"list\"]},\"text\":{\"type\":\"string\"},\"id\":{\"type\":\"string\"}}}"},
  {"web_search","Experimental text-only search engine query; may fail on anti-bot pages.",PARAM1("query","Internet search query")},
+ {"geo_search","Find a real place, city or street using OpenStreetMap Nominatim. Supply the PLAIN UTF-8 name; NEVER manually URL-encode it.",PARAM1("query","Place name or address in ordinary UTF-8 (for example: Stěžery, Višňová, Česko)")} ,
  {"web_extract","Extract readable text from a public HTTPS page.",PARAM1("url","Public HTTPS URL")},
  {"http_request","Read-only HTTP GET to a public HTTPS URL (no secrets or cookies).",PARAM1("url","Public HTTPS URL")},
  {"github_issues","Read public GitHub repository issues using the public API.",PARAM1("repo","owner/repo")},
@@ -109,7 +111,7 @@ bool adam_tools_known(const char *name){
 }
 bool adam_tools_is_network(const char *name){
  if(!name)return false;
- return !strcmp(name,"web_search") || !strcmp(name,"web_extract") ||
+ return !strcmp(name,"web_search") || !strcmp(name,"geo_search") || !strcmp(name,"web_extract") ||
         !strcmp(name,"http_request") || !strcmp(name,"github_issues") ||
         !strcmp(name,"github_pull_request") || !strcmp(name,"github_actions");
 }
@@ -540,6 +542,22 @@ static bool good_repo(const char *repo){
  }
  return true;
 }
+/* URL encoding belongs to the tool, never to the language model. Public so
+ * its Czech UTF-8 percent encoding can be verified without HTTP access. */
+char *adam_geo_search_url(const char *query) {
+ if(!query||!*query||strlen(query)>240)return NULL;
+ CURL *curl=curl_easy_init();
+ if(!curl)return NULL;
+ char *encoded=curl_easy_escape(curl,query,0);
+ if(!encoded){curl_easy_cleanup(curl);return NULL;}
+ const char *base="https://nominatim.openstreetmap.org/search?format=jsonv2&addressdetails=1&limit=5&q=";
+ size_t size=strlen(base)+strlen(encoded)+1;
+ char *url=malloc(size);
+ if(url)snprintf(url,size,"%s%s",base,encoded);
+ curl_free(encoded);
+ curl_easy_cleanup(curl);
+ return url;
+}
 static bool network_op(AdamToolContext *ctx,const char *name,struct json_object *args,
                        char **output,char *error,size_t cap){
  const char *url=arg_string(args,"url");
@@ -547,17 +565,53 @@ static bool network_op(AdamToolContext *ctx,const char *name,struct json_object 
   if(!url){fail(error,cap,"Missing HTTPS URL");return false;}
   return fetch_public(ctx,url,output,error,cap);
  }
- if(!strcmp(name,"web_search")){
+ if(!strcmp(name,"web_search") || !strcmp(name,"geo_search")){
+  bool geocode=!strcmp(name,"geo_search");
   const char *q=arg_string(args,"query");
   if(!q||!*q||strlen(q)>240){fail(error,cap,"Query must be 1..240 bytes");return false;}
-  CURL *curl=curl_easy_init();if(!curl){fail(error,cap,"libcurl unavailable");return false;}
-  char *encoded=curl_easy_escape(curl,q,0);
-  if(!encoded){curl_easy_cleanup(curl);return false;}
-  size_t size=strlen(encoded)+100;char *dest=malloc(size);
-  if(dest)snprintf(dest,size,"https://html.duckduckgo.com/html/?q=%s",encoded);
-  curl_free(encoded);curl_easy_cleanup(curl);
-  if(!dest)return false;
-  bool ok=fetch_public(ctx,dest,output,error,cap);free(dest);
+  char *dest=NULL;
+  if(geocode)dest=adam_geo_search_url(q);
+  else {
+   CURL *curl=curl_easy_init();
+   if(!curl){fail(error,cap,"libcurl unavailable");return false;}
+   char *encoded=curl_easy_escape(curl,q,0);
+   if(encoded) {
+    const char *base="https://html.duckduckgo.com/html/?q=";
+    size_t size=strlen(base)+strlen(encoded)+1;
+    dest=malloc(size);
+    if(dest)snprintf(dest,size,"%s%s",base,encoded);
+    curl_free(encoded);
+   }
+   curl_easy_cleanup(curl);
+  }
+  if(!dest){fail(error,cap,"Could not encode UTF-8 web search query");return false;}
+  /* Nominatim public service policy: <=1 search request/second.
+   * Serialize requests across AdamAI worker threads, too. */
+  static pthread_mutex_t geo_mutex=PTHREAD_MUTEX_INITIALIZER;
+  static struct timespec geo_previous={0,0};
+  if(geocode) {
+   pthread_mutex_lock(&geo_mutex);
+   struct timespec now={0,0};
+   (void)clock_gettime(CLOCK_MONOTONIC,&now);
+   if(geo_previous.tv_sec) {
+    long long delta=(long long)(now.tv_sec-geo_previous.tv_sec)*1000000000LL+
+                    (long long)(now.tv_nsec-geo_previous.tv_nsec);
+    if(delta<1000000000LL) {
+     long long remaining=1000000000LL-delta;
+     struct timespec delay={(time_t)(remaining/1000000000LL),(long)(remaining%1000000000LL)};
+     (void)nanosleep(&delay,NULL);
+    }
+   }
+   (void)clock_gettime(CLOCK_MONOTONIC,&geo_previous);
+  }
+  bool ok=fetch_public(ctx,dest,output,error,cap);
+  if(geocode)pthread_mutex_unlock(&geo_mutex);
+  if(geocode && ok && *output && strstr(*output,"content:\n[]")) {
+   free(*output);
+   *output=duplicate("Nominatim returned NO MATCHES for this plain-text query. Do not infer the place does not exist. Try web_search with the original spelling or consult another source.");
+   ok=*output!=NULL;
+  }
+  free(dest);
   return ok;
  }
  const char *repo=arg_string(args,"repo");
@@ -660,7 +714,7 @@ bool adam_tools_execute(const char *name,struct json_object *args,AdamToolContex
   return memory_op(ctx,name,args,output,error,cap);
  if(!strcmp(name,"task_manager"))
   return task_op(ctx,args,output,error,cap);
- if(!strcmp(name,"web_search")||!strcmp(name,"web_extract")||
+ if(!strcmp(name,"web_search")||!strcmp(name,"geo_search")||!strcmp(name,"web_extract")||
     !strcmp(name,"http_request")||!strcmp(name,"github_issues")||
     !strcmp(name,"github_pull_request")||!strcmp(name,"github_actions"))
   return network_op(ctx,name,args,output,error,cap);

@@ -64,6 +64,10 @@ if(BUILD_TESTING)
     target_link_libraries(adam_chat_store_test PRIVATE adam_core)
     add_test(NAME chat_store COMMAND adam_chat_store_test)
 
+    add_executable(adam_geo_query_test tests/test_geo_query.c)
+    target_link_libraries(adam_geo_query_test PRIVATE adam_core)
+    add_test(NAME geo_utf8_query COMMAND adam_geo_query_test)
+
     add_executable(adam_agent_tools_test tests/test_agent_tools.c)
     target_link_libraries(adam_agent_tools_test PRIVATE adam_core)
     add_test(NAME agent_tools COMMAND adam_agent_tools_test)
@@ -92,6 +96,13 @@ if(BUILD_TESTING)
                  COMMAND ${Python3_EXECUTABLE}
                          ${CMAKE_CURRENT_SOURCE_DIR}/tests/mock_ollama_tags.py
                          $<TARGET_FILE:adam_model_tags_http_test>)
+
+        add_executable(adam_loop_guard_test tests/test_ollama_loop_guard.c)
+        target_link_libraries(adam_loop_guard_test PRIVATE adam_core)
+        add_test(NAME ollama_repeat_guard
+                 COMMAND ${Python3_EXECUTABLE}
+                         ${CMAKE_CURRENT_SOURCE_DIR}/tests/mock_ollama_loop_guard.py
+                         $<TARGET_FILE:adam_loop_guard_test>)
 
         add_executable(adam_web_loop_test tests/test_ollama_web_loop.c)
         target_link_libraries(adam_web_loop_test PRIVATE adam_core)

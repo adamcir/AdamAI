@@ -1275,14 +1275,9 @@ static void process_stream(App *a) {
                 set_status(a, "Writing response...");
                 break;
             case ADAM_STREAM_TOOL:
-                if (event->text) {
-                    if (m->content && *m->content) adam_text_append(&m->content, "\n");
-                    adam_text_append(&m->content, "[Tool] ");
-                    adam_text_append(&m->content, event->text);
-                    adam_text_append(&m->content, "\n");
-                    a->dirty = true;
-                }
-                set_status(a, "Tool operation...");
+                /* Tool progress belongs in the status bar, not in the model's
+                 * answer/history. It must not be re-fed to Ollama as evidence. */
+                set_status(a,event->text ? event->text : "Tool operation...");
                 break;
             case ADAM_STREAM_APPROVAL:
                 free(a->approval_details);

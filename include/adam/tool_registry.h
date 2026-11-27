@@ -23,6 +23,8 @@ typedef struct {
 struct json_object *adam_tools_schemas(void);
 bool adam_tools_known(const char *name);
 bool adam_tools_is_network(const char *name);
+/* Return caller-owned HTTPS Nominatim URL for a plain UTF-8 place query. */
+char *adam_geo_search_url(const char *query);
 /* Returns true only on success. Caller frees output; failure explains why. */
 bool adam_tools_execute(const char *name, struct json_object *args,
                         AdamToolContext *ctx, char **output,

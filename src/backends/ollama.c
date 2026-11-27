@@ -433,6 +433,41 @@ static bool append_tool_results(AdamStream *s, struct json_object *calls) {
     return true;
 }
 
+
+/* Finish a long task with an answer rather than returning an unhelpful
+ * Tool-call limit reached error. The last request advertises NO tools. */
+static bool request_final_without_tools(AdamStream *s, const char *why) {
+    struct json_object *root=json_tokener_parse(s->payload);
+    if(!root)return false;
+    struct json_object *messages=NULL;
+    if(!json_object_object_get_ex(root,"messages",&messages) ||
+       !json_object_is_type(messages,json_type_array)){
+        json_object_put(root);
+        return false;
+    }
+    json_object_object_del(root,"tools");
+    struct json_object *instruction=json_object_new_object();
+    if(!instruction){json_object_put(root);return false;}
+    json_object_object_add(instruction,"role",json_object_new_string("system"));
+    char text[650];
+    snprintf(text,sizeof(text),
+             "No further tools are available this turn (%s). "
+             "Now give a concise final answer from evidence already obtained. "
+             "Clearly distinguish confirmed facts from missing or failed searches. "
+             "Do not repeat searches or invent citations. "
+             "An empty geocoder result alone is not proof a place does not exist.",
+             why?why:"tool-call budget reached");
+    json_object_object_add(instruction,"content",json_object_new_string(text));
+    json_object_array_add(messages,instruction);
+    const char *encoded=json_object_to_json_string_ext(root,JSON_C_TO_STRING_PLAIN);
+    char *payload=encoded?strdup(encoded):NULL;
+    json_object_put(root);
+    if(!payload)return false;
+    free(s->payload);
+    s->payload=payload;
+    return true;
+}
+
 static int progress_check(void *userdata, curl_off_t dltotal, curl_off_t dlnow,
                           curl_off_t ultotal, curl_off_t ulnow) {
     (void)dltotal; (void)dlnow; (void)ultotal; (void)ulnow;
@@ -441,8 +476,20 @@ static int progress_check(void *userdata, curl_off_t dltotal, curl_off_t dlnow,
 
 static void *stream_worker(void *arg) {
     AdamStream *s = arg;
-    /* Bounded multi-step agent: workspace approval, inspection, edit, etc. */
+    /* Bounded multi-step agent with one final answer-only turn and early
+     * shutdown of obvious repeated identical calls. */
+    bool final_only=false;
+    char *previous_calls=NULL;
+    int identical_retries=0;
     for (int turn = 0; turn <= MAX_TOOL_ROUNDS && !atomic_load(&s->cancelled); ++turn) {
+        if(turn==MAX_TOOL_ROUNDS && !final_only) {
+            if(!request_final_without_tools(s,"tool-call budget reached")) {
+                enqueue(ADAM_STREAM_ERROR,"Could not prepare final answer",s);
+                break;
+            }
+            final_only=true;
+            enqueue(ADAM_STREAM_TOOL,"Tool budget reached; summarizing available evidence",s);
+        }
         Receiver r = {.stream = s};
         CURL *curl = curl_easy_init();
         if (!curl) {
@@ -490,10 +537,30 @@ static void *stream_worker(void *arg) {
             if (r.calls) json_object_put(r.calls);
             break;
         }
-        if (turn >= MAX_TOOL_ROUNDS) {
-            enqueue(ADAM_STREAM_ERROR,"Tool-call limit reached",s);
+        if (final_only) {
+            enqueue(ADAM_STREAM_TOOL,
+                    "No further tool calls allowed; final answer may be incomplete",s);
             json_object_put(r.calls);
             break;
+        }
+        const char *canonical=json_object_to_json_string_ext(
+            r.calls,JSON_C_TO_STRING_PLAIN);
+        if(canonical && previous_calls && !strcmp(previous_calls,canonical))
+            identical_retries++;
+        else identical_retries=0;
+        free(previous_calls);
+        previous_calls=canonical?strdup(canonical):NULL;
+        /* Identical calls repeated three times add no new evidence.
+         * Stop before executing the third duplicate. */
+        if(identical_retries>=2) {
+            json_object_put(r.calls);
+            if(!request_final_without_tools(s,"three consecutive identical tool requests")) {
+                enqueue(ADAM_STREAM_ERROR,"Could not prepare final answer",s);
+                break;
+            }
+            final_only=true;
+            enqueue(ADAM_STREAM_TOOL,"Repeated calls stopped; preparing final answer",s);
+            continue;
         }
         bool ready = append_tool_results(s,r.calls);
         json_object_put(r.calls);
@@ -503,6 +570,7 @@ static void *stream_worker(void *arg) {
             break;
         }
     }
+    free(previous_calls);
     enqueue(ADAM_STREAM_DONE,NULL,s);
     return NULL;
 }
@@ -624,6 +692,10 @@ bool adam_ollama_start(AdamStream *s, const AdamChat *chat,
         "Do not fabricate tool results. Never execute commands or access files without tools. "
         "Use search_files and find_files before exploring unfamiliar projects. "
         "Web_search is experimental; if search is blocked explain this clearly. "
+        "For place names, streets and addresses use geo_search with plain UTF-8 "
+        "place names (example: Stěžery, Višňová, Česko), not manually percent-"
+        "encoded URLs. Let the tool encode the query. If it returns no results, "
+        "try an independent web_search and avoid repeated guesses. "
         "Memory_update and task mutations require user approval. "
         "Do not send local file contents to remote websites without permission. "
         "The terminal tool runs approved argv only, never shell commands; it is not "

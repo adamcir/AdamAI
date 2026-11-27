@@ -299,3 +299,23 @@ credential handling or stronger isolation.
 
 Clipboard data remains local to your terminal. Pasted content is inserted as
 text, not interpreted as a shell command or an immediate chat message.
+
+### Web-tool retry guard and UTF-8 place searches
+
+The `geo_search(query)` tool accepts a **plain UTF-8 name or address**.
+AdamAI escapes it via libcurl and queries OpenStreetMap Nominatim with
+a descriptive User-Agent; its requests are serialized and rate-limited to
+one request per second. Example query: `Stěžery Višňová`. Do not manually
+percent-encode Czech names into `web_fetch` URLs. An empty geocoder response
+is **not** evidence that the street/place does not exist: try `web_search`
+or another independent source.
+
+The agent still has a finite resource budget (12 tool rounds by default),
+but after exhausting it, makes **one final answer-only request** with tools
+disabled, asking Adam 1 to summarize verified results and disclose uncertainty
+instead of showing only `Tool-call limit reached`. Three consecutive
+identical tool-call batches are stopped early. Tool progress appears in the
+status bar rather than being saved into the conversation as assistant text.
+
+This reduces wasted repeats but cannot ensure that a language model chooses
+relevant queries or interprets every search result correctly.
