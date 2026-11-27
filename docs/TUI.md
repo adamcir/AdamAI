@@ -234,8 +234,17 @@ automatic by default; `/web ask` restores per-URL confirmation.
 - The terminal is placed into **bracketed paste** mode while AdamAI runs.
   Newlines from pasted text are inserted literally into the editor; they do
   not submit prompts. The mode is disabled on normal exit.
-- Copy additionally tries OSC 52 to the terminal clipboard. OSC 52 is
-  optional, so this is not guaranteed to populate the OS clipboard.
+- Copy first uses the Linux **desktop clipboard**, preferring
+  `wl-copy --type text/plain;charset=utf-8` when `WAYLAND_DISPLAY` is set;
+  otherwise or on failure, it attempts `xclip -selection clipboard -in`
+  and `xsel --clipboard --input` when `DISPLAY` is set. Providers are
+  launched with `fork/execvp` and an argument vector, never a shell, with
+  bounded IPC and process timeout. Text is UTF-8, max 64 KiB.
+- When no desktop clipboard provider succeeds, the selection remains in
+  the internal clipboard and AdamAI attempts OSC 52 as a fallback. OSC 52
+  depends on terminal support and cannot guarantee access from other apps.
+- `tests/test_clipboard.c` checks Wayland, X11 and fallback behavior with
+  mock clipboard processes, without contacting a graphical session.
 - Selection boundaries, extraction and bounded Unicode insertion are tested
   in `tests/test_text_selection.c`.
 - Mouse support depends on the terminal emulator; Shift+drag can still be

@@ -12,6 +12,7 @@
 #include "adam/web_fetch.h"
 #include "adam/text_wrap.h"
 #include "adam/text_selection.h"
+#include "adam/clipboard.h"
 #include <ncursesw/curses.h>
 #include <curl/curl.h>
 #include <limits.h>
@@ -1405,8 +1406,21 @@ static void save_clipboard(App *a, char *text) {
     if (!text || !*text) {free(text);set_status(a,"No text selected");return;}
     free(a->clipboard);
     a->clipboard=text;
-    clipboard_osc52(text);
-    set_status(a,"Copied selection. Ctrl+V paste here; Ctrl+Shift+V terminal paste");
+
+    /* Unlike OSC 52 alone, wl-copy/xclip/xsel populate the actual desktop
+     * clipboard so text can be pasted into another application or source
+     * file. Never claim OS clipboard success if the provider failed. */
+    AdamClipboardBackend desktop=adam_clipboard_copy_system(text);
+    if(desktop==ADAM_CLIPBOARD_WAYLAND)
+        set_status(a,"Copied to Wayland clipboard - paste in any editor with Ctrl+V");
+    else if(desktop==ADAM_CLIPBOARD_X11)
+        set_status(a,"Copied to X11 clipboard - paste in any editor with Ctrl+V");
+    else {
+        /* Terminal-dependent fallback for SSH and other non-desktop sessions. */
+        clipboard_osc52(text);
+        set_status(a,"Copied internally; external clipboard unconfirmed. "
+                     "Install wl-clipboard (Wayland) or xclip (X11)");
+    }
 }
 static char *copy_chat_text(const App *a) {
     if (!a->chat_selected || !a->chat.count) return NULL;

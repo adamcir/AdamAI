@@ -284,9 +284,16 @@ credential handling or stronger isolation.
   and never interprets pasted Enter as Submit.
 - `Ctrl+C` copies a selection if present; otherwise it retains its previous
   behavior of cancelling a running model request. `Esc` clears selections.
-- AdamAI additionally attempts to copy selections to the system clipboard
-  through terminal **OSC 52**. Some terminals intentionally block OSC 52;
-  internal copy and `Ctrl+V` still work in that case.
+- **External application clipboard:** `Ctrl+C` sends selected UTF-8 text
+  directly to the Linux desktop clipboard through `wl-copy` on Wayland or
+  `xclip`/`xsel` on X11. You can paste it with **Ctrl+V in VS Code, Kate,
+  Gedit, LibreOffice or another editor**, including into a source file.
+  Install one provider if needed:
+  `sudo apt install wl-clipboard xclip`.
+- **Fallback:** if no working desktop clipboard is available, AdamAI retains
+  its internal clipboard and attempts terminal OSC 52; some terminals
+  block OSC 52. The status bar clearly indicates whether desktop clipboard
+  copying succeeded. `Ctrl+V` inside AdamAI still works without a provider.
 - Terminal mouse capture may disable ordinary drag selection by the terminal
   itself. Many terminals allow native text selection using Shift+drag.
 
