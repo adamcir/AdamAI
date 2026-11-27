@@ -50,10 +50,11 @@ Features:
 - **Workspace filesystem tools:** `list_directory`, `read_file`, `write_file`
   and `request_workspace`. Model-proposed or manual directory changes require
   an explicit **Y/N approval**, just like writes.
-- **Web access:** `web_fetch` reads public HTTPS pages. Web and FS are **on
-  by default**; when both are on, each outgoing URL requires **Y/N approval**.
-  Each permission can still be disabled with `/web off` or `/fs off`.
-- **Default model:** `adam1`, configurable with `ADAM_MODEL` or `/model`.
+- **Web browsing:** public HTTPS pages, linked pages and public search results
+  can be browsed automatically without confirming each URL. Toggle with
+  `/web auto`, `/web ask` or `/web off`. Network IP restrictions remain on.
+- **Default model:** `adam1` is resolved through Ollama `/api/tags` to an
+  installed variant such as `adam1:1.0`. Supports `/model adam1:*`.
 
 ### Linux dependencies
 
@@ -72,17 +73,19 @@ ctest --test-dir build --output-on-failure
 
 ### Run
 
-Start Ollama locally and ensure your custom model is available as
-`adam1` (see `ollama list`):
+Start Ollama locally. AdamAI fetches `/api/tags` to choose an installed
+model whose name is `adam1` or starts with `adam1:`, for example
+`adam1:1.0`. The highest numeric version is preferred:
 
 ```bash
 ollama list
 ./build/AdamAI
 ```
 
-If your custom model instead uses a tag such as `adam1:1.0`, launch with
-`ADAM_MODEL=adam1:1.0 ./build/AdamAI`. A previously saved chat may restore its
-original model; select `/model adam1` to start a new chat with Adam 1.
+You can also select the family with `/model adam1:*` or an explicit tag with
+`/model adam1:1.0`. An older saved chat retains its historical model name,
+except that a bare `adam1` will be resolved automatically. New chats use the
+auto-selected Adam 1 model. Start Ollama before launching AdamAI.
 
 Or try a lighter model:
 
@@ -93,11 +96,12 @@ ADAM_MODEL=qwen3:8b ADAM_THINK=true ./build/AdamAI
 
 | Environment variable | Default | Description |
 |---|---|---|
-| `ADAM_MODEL` | `adam1` | Ollama model name (must exist locally) |
+| `ADAM_MODEL` | `adam1` | Automatically resolves installed `adam1:*` tags |
 | `ADAM_OLLAMA_URL` | `http://127.0.0.1:11434` | Local Ollama endpoint |
 | `ADAM_THINK` | `medium` | `low`, `medium`, `high`, `true` or `off`, model-dependent |
 | `ADAM_TUI_THEME` | `dark` | `dark` or `light` |
-| `ADAM_WEB_ENABLED` | `1` | Web tools enabled by default; set `0` to disable |
+| `ADAM_WEB_ENABLED` | `1` | Read-only web browsing on by default |
+| `ADAM_WEB_CONFIRM` | `0` | Set `1` to confirm every outbound web URL |
 | `ADAM_FS_ENABLED` | `1` | FS tools enabled by default; set `0` to disable |
 | `ADAM_FS_ROOT` | Current directory | Explicit project root (defaults to where AdamAI is launched) |
 
@@ -105,9 +109,9 @@ For key bindings, architecture and limitations see [docs/TUI.md](docs/TUI.md).
 
 ### Current limitations
 
-This preview provides chat, saved sessions, the **read-only web_fetch**
-internet tool and scoped **filesystem tools**. It still cannot run shell
-commands, browse JavaScript websites or search the web automatically.
+This preview includes chat, saved sessions, read-only public web browsing,
+search, and scoped filesystem/developer tools. It cannot run JavaScript in
+pages or browse authenticated websites; search can be blocked by providers.
 Chat histories remain local (not sent to GitHub). Internet requests can contact
 external servers when web mode is enabled or a one-off URL is provided.
 Do not confuse the application's local *workspace label* with filesystem access.
@@ -138,16 +142,25 @@ last streamed characters. The initial empty chat is saved only once used or when
 
 ### Web access (first implementation)
 
-The internet tool is **enabled by default**. Type `/web off` to disable it,
-`/web on` to re-enable it, or use `/web https://example.com/` for a specific
-URL. When FS is also enabled (the default), **every outgoing HTTPS request
-requires user approval** after the complete destination URL is shown.
-The active model must support Ollama function calls (tools).
+Public web browsing is **enabled by default** and automatic: AdamAI can
+search and visit publicly accessible HTTPS pages, then follow HTTPS links
+returned from those pages. `/web auto` enables automatic read-only browsing;
+`/web ask` requires Y/N confirmation for each requested URL; `/web off`
+disables browsing. `/web https://example.com/` requests a specific URL.
+The active model must support Ollama function calling (tools).
+
+**Privacy:** When web and FS are enabled simultaneously, the model may have
+access to local file contents, and an external URL or search query can reveal
+those contents. Automatic browsing does **not** prevent this kind of leakage.
+For sensitive work, use `/fs off` before browsing, or `/web ask` to review
+the entire destination URL before each request. URLs may be recorded by
+visited websites. Never use private credentials in URLs.
 
 The web tool only reads text, HTML or JSON over verified **HTTPS** on port 443.
 It rejects private/reserved destination IPs (including after DNS resolution),
-does not follow redirects, uses no proxies or local credentials, and limits
-downloads to 512 KiB, extracted text to 12,000 bytes, and requests to 20 seconds.
+follows up to 3 HTTPS-only redirects, uses no proxies or local credentials,
+extracts up to 24 browsable HTTPS links, and limits downloads to 512 KiB,
+text to 12,000 bytes, and requests to 20 seconds.
 At most six tool-call rounds occur per AI response. JavaScript-driven sites,
 search queries, login-required pages, binary files and redirected URLs are not
 yet supported. Web content is untrusted and may contain errors or instructions;
@@ -188,11 +201,11 @@ cannot traverse symbolic links. Common secret locations (.git, .env, .ssh,
 .aws) are blocked. Only UTF-8 text files are supported (read limit 128 KiB,
 write limit 32 KiB). Writes use a temporary file and atomic rename, preserving
 the existing file's mode; no new parent directories are created.
-**Filesystem and web tools are both enabled at startup.** Each `web_fetch`
-URL needs a separate user confirmation while FS is active, including the
-`/web URL` one-shot flow. Review the **entire URL and query string** before
-pressing Y, because a model could accidentally include private file contents
-in a URL. Do not approve suspicious destinations.
+**Filesystem and web tools are both enabled at startup.** Public HTTPS
+browsing is now automatic. This is convenient but allows data in model-generated
+URLs or search queries to reach outside servers. Use `/web ask` (or
+`ADAM_WEB_CONFIRM=1`) for approval before every outbound URL, or `/fs off`
+while browsing sensitive projects.
 
 This is defense in depth, **not a security sandbox**. The Ollama model still
 receives local file contents when using FS tools. Disable permissions when

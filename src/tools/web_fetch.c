@@ -1,6 +1,7 @@
 /* AdamAI - GPL-3.0-only */
 #define _POSIX_C_SOURCE 200809L
 #include "adam/web_fetch.h"
+#include "adam/web_links.h"
 #include <arpa/inet.h>
 #include <curl/curl.h>
 #include <ctype.h>
@@ -273,7 +274,11 @@ bool adam_web_fetch(const char *url, const atomic_bool *cancelled,
 #define SET(option,value) do { if (settings == CURLE_OK) settings = curl_easy_setopt(curl, option, value); } while(0)
     SET(CURLOPT_URL,url);
     SET(CURLOPT_PROTOCOLS_STR,"HTTPS");
-    SET(CURLOPT_FOLLOWLOCATION,0L); /* never follow untrusted redirects */
+    /* Follow a small number of HTTPS-only redirects. libcurl calls the
+     * pre-request public-IP guard for every new connection. */
+    SET(CURLOPT_FOLLOWLOCATION,1L);
+    SET(CURLOPT_MAXREDIRS,3L);
+    SET(CURLOPT_REDIR_PROTOCOLS_STR,"HTTPS");
     SET(CURLOPT_PROXY,""); /* no proxy or environment-derived proxy */
     SET(CURLOPT_NOPROXY,"*");
     SET(CURLOPT_NETRC,CURL_NETRC_IGNORED);
@@ -309,11 +314,45 @@ bool adam_web_fetch(const char *url, const atomic_bool *cancelled,
     bool ok = code == CURLE_OK && status >= 200 && status < 300 &&
               (!mime || content_type_allowed(mime));
     if (ok) {
-        bool html = mime && (prefix_case(mime,"text/html") ||
-                             prefix_case(mime,"application/xhtml+xml"));
-        page->text = adam_web_extract_text(b.data,b.len,html,&page->truncated);
-        page->status = status;
-        ok = page->text != NULL;
+        char *effective=NULL;
+        curl_easy_getinfo(curl,CURLINFO_EFFECTIVE_URL,&effective);
+        const char *actual=effective ? effective : url;
+        if(!adam_web_validate_url(actual,error,error_size)) ok=false;
+        if(ok) {
+            page->final_url=strdup(actual);
+            bool html = mime && (prefix_case(mime,"text/html") ||
+                                 prefix_case(mime,"application/xhtml+xml"));
+            page->text = adam_web_extract_text(b.data,b.len,html,&page->truncated);
+            page->status = status;
+            ok = page->text != NULL && page->final_url != NULL;
+            if(ok && html) {
+                char *links=adam_web_extract_links(b.data,b.len,actual);
+                if(links) {
+                    const char *prefix="\n\nLinks for further browsing:\n";
+                    size_t link_len=strlen(links),prefix_len=strlen(prefix);
+                    if(link_len+prefix_len+1<ADAM_WEB_MAX_TEXT) {
+                        size_t original=strlen(page->text);
+                        size_t remaining=ADAM_WEB_MAX_TEXT-link_len-prefix_len-1;
+                        if(original>remaining) {
+                            /* Avoid splitting UTF-8 code points when trimming
+                             * article text to make room for its links. */
+                            while(remaining>0 && (((unsigned char)page->text[remaining]&0xC0)==0x80))
+                                --remaining;
+                            page->text[remaining]='\0';
+                            page->truncated=true;
+                            original=remaining;
+                        }
+                        char *combined=realloc(page->text,original+prefix_len+link_len+1);
+                        if(combined) {
+                            page->text=combined;
+                            memcpy(page->text+original,prefix,prefix_len);
+                            memcpy(page->text+original+prefix_len,links,link_len+1);
+                        }
+                    }
+                    free(links);
+                }
+            }
+        }
     } else if (cancelled && atomic_load(cancelled))
         errorf(error,error_size,"Cancelled");
     else if (b.oversized) errorf(error,error_size,"Page exceeds 512 KiB limit");
@@ -331,5 +370,6 @@ bool adam_web_fetch(const char *url, const atomic_bool *cancelled,
 void adam_web_page_free(AdamWebPage *page) {
     if (!page) return;
     free(page->text);
+    free(page->final_url);
     memset(page,0,sizeof(*page));
 }

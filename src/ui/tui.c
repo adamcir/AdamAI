@@ -65,7 +65,7 @@ static const Command commands[] = {
     {"/rename", "Rename current conversation", true},
     {"/delete", "Delete current chat (confirmation required)", false},
     {"/model", "Choose an Ollama model", true},
-    {"/web", "Web access: on/off, or /web HTTPS_URL", true},
+    {"/web", "Free public HTTPS browsing: auto/ask/off, or URL", true},
     {"/fs", "Workspace files: on/off (writes require approval)", true},
     {"/workspace", "Change project folder with Y/N permission", true},
     {"/tools", "List developer-agent capabilities", false},
@@ -513,7 +513,7 @@ static void draw_help(int x, int width, int top, int available) {
         "Enter         Send message or run command",
         "Ctrl+O        Insert newline in composer",
         "Ctrl+P        Open slash-command palette",
-        "Web           /web on/off or /web HTTPS_URL",
+        "Web           /web auto/ask/off or /web HTTPS_URL",
         "Files         /fs on/off  (write requires Y)",
         "Agent         /tools lists coding and Git capabilities",
         "Ctrl+W        Request change of project folder",
@@ -1009,13 +1009,29 @@ static void command(App *a, const char *input) {
     }
     if (!strcmp(input, "/help")) { show_help_message(a); return; }
     if (!strcmp(input, "/web") || !strcmp(input, "/web status")) {
-        set_status(a, a->web_enabled ? "Web tool enabled (/web off to disable)" :
-                                     "Web tool disabled (/web on to enable)");
+        const char *confirm=getenv("ADAM_WEB_CONFIRM");
+        bool ask=confirm && (!strcmp(confirm,"1") || !strcmp(confirm,"true") ||
+                              !strcmp(confirm,"on"));
+        set_status(a, !a->web_enabled ? "Web disabled (/web auto to enable)" :
+                   ask ? "Web enabled; confirm each URL (/web auto for automatic)" :
+                         "Web auto: public HTTPS links without per-page approval");
+        return;
+    }
+    if (!strcmp(input, "/web auto")) {
+        unsetenv("ADAM_WEB_CONFIRM");
+        a->web_enabled = true;
+        set_status(a,"Web auto enabled: public HTTPS without per-URL prompts");
+        return;
+    }
+    if (!strcmp(input, "/web ask")) {
+        setenv("ADAM_WEB_CONFIRM","1",1);
+        a->web_enabled = true;
+        set_status(a,"Web ask enabled: every outgoing URL requires Y/N");
         return;
     }
     if (!strcmp(input, "/web on")) {
         a->web_enabled = true;
-        set_status(a,"Web enabled; when FS is also on, each URL needs Y/N approval");
+        set_status(a,"Public web enabled (automatic unless /web ask is selected)");
         return;
     }
     if (!strcmp(input, "/web off")) {
@@ -1060,7 +1076,7 @@ static void command(App *a, const char *input) {
             "format_code. Git: git_status, git_diff, git_log, git_branch, git_commit.\n"
             "System: hardware_info, model_manager.\n"
             "Web: web_search, web_extract, http_request, github_issues,\n"
-            "github_pull_request, github_actions (each request needs consent).\n"
+            "github_pull_request, github_actions (public HTTPS browsing auto).\n"
             "Memory: memory_search, memory_update, task_manager.\n"
             "Writes and shell-free command execution require approval.\n"
             "This is not a full command sandbox; review each proposed operation.";

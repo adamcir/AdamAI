@@ -511,15 +511,20 @@ static bool fetch_public(AdamToolContext *ctx,const char *url,
  snprintf(prompt,n,"OUTBOUND WEB REQUEST APPROVAL REQUIRED\nDestination URL:\n%s\n"
          "Inspect FULL URL for personal or project data before allowing.\n"
          "Press Y to make this public HTTPS request.",url);
- bool yes=request(ctx,prompt,error,cap);free(prompt);
+ const char *confirm=getenv("ADAM_WEB_CONFIRM");
+ bool ask=confirm && (!strcmp(confirm,"1") ||
+                       !strcmp(confirm,"true") || !strcmp(confirm,"on"));
+ bool yes=!ask || request(ctx,prompt,error,cap);
+ free(prompt);
  if(!yes)return false;
  AdamWebPage page={0};
  bool ok=adam_web_fetch(url,ctx->cancelled,&page,error,cap);
  if(ok){
-  size_t need=strlen(url)+strlen(page.text)+256;
+  const char *actual=page.final_url ? page.final_url : url;
+  size_t need=strlen(actual)+strlen(page.text)+256;
   *output=malloc(need);
   if(*output)snprintf(*output,need,"Source URL: %s\nUntrusted public web content:\n%s%s",
-                       url,page.text,page.truncated?"\n[truncated]":"");
+                       actual,page.text,page.truncated?"\n[truncated]":"");
   else ok=false;
  }
  adam_web_page_free(&page);

@@ -16,6 +16,8 @@ add_library(adam_core STATIC
     src/core/chat.c
     src/core/chat_store.c
     src/tools/web_fetch.c
+    src/backends/web_links.c
+    src/backends/model_discovery.c
     src/tools/fs_tool.c
     src/agent/tool_registry.c
     src/backends/ollama.c
@@ -61,6 +63,14 @@ if(BUILD_TESTING)
     target_link_libraries(adam_fs_tool_test PRIVATE adam_core)
     add_test(NAME fs_tool COMMAND adam_fs_tool_test)
 
+    add_executable(adam_model_discovery_test tests/test_model_discovery.c)
+    target_link_libraries(adam_model_discovery_test PRIVATE adam_core)
+    add_test(NAME model_discovery COMMAND adam_model_discovery_test)
+
+    add_executable(adam_web_links_test tests/test_web_links.c)
+    target_link_libraries(adam_web_links_test PRIVATE adam_core)
+    add_test(NAME web_links COMMAND adam_web_links_test)
+
     add_executable(adam_web_fetch_test tests/test_web_fetch.c)
     target_link_libraries(adam_web_fetch_test PRIVATE adam_core)
     add_test(NAME web_fetch COMMAND adam_web_fetch_test)
@@ -87,5 +97,8 @@ if(BUILD_TESTING)
                  COMMAND ${Python3_EXECUTABLE}
                          ${CMAKE_CURRENT_SOURCE_DIR}/tests/mock_workspace_web.py
                          $<TARGET_FILE:adam_permissions_test>)
+        # Existing approval test explicitly enables the optional strict mode.
+        set_tests_properties(workspace_and_web_approvals
+                             PROPERTIES ENVIRONMENT "ADAM_WEB_CONFIRM=1")
     endif()
 endif()

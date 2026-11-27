@@ -196,3 +196,26 @@ restricted to public HTTPS GET; it does not support POST or account
 credentials. GitHub API tools fetch only public data. A separate Y/N
 confirmation must approve each URL when called through the developer
 agent while FS is available.
+
+## Automatic web browsing and Adam 1 model discovery
+
+- At launch, AdamAI asks the configured Ollama API for `/api/tags`. An
+  untagged default `adam1` or wildcard `adam1:*` is resolved to the
+  highest installed numeric tag, such as `adam1:1.0`. Explicit versioned
+  model names remain unchanged. The lookup also applies to previously saved
+  conversations referencing bare `adam1`.
+- Read-only HTTPS requests run without per-page approval by default.
+  `/web auto` enables this mode; `/web ask` restores Y/N confirmation
+  for each URL; `/web off` disables the tools. `ADAM_WEB_CONFIRM=1` enables
+  strict confirmation at startup.
+- The HTML extractor includes up to 24 validated HTTPS links, resolves
+  relative references, and unwraps common search-result redirect links.
+  HTTPS redirects (up to 3) are supported with per-connection public-IP
+  checks. The model may search, read an article, then follow links in up to
+  12 sequential tool-call rounds per user turn.
+- **Security tradeoff:** Automatic requests with FS active may allow model-
+  generated search strings/URLs to expose local contents. Public-IP restrictions
+  prevent localhost/private-network access, but not data exfiltration to a
+  public domain. Use `/web ask` or disable FS for sensitive projects.
+- No client-side JavaScript, interactive logins, file uploads, arbitrary
+  POST requests or unrestricted binary downloads.

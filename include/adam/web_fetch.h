@@ -12,6 +12,7 @@
 
 typedef struct {
     char *text; /* extracted readable UTF-8-ish document text (caller frees) */
+    char *final_url; /* validated final HTTPS URL, if server redirects */
     long status;
     bool truncated;
 } AdamWebPage;
