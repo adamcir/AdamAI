@@ -5,6 +5,7 @@
 #include <errno.h>
 #include <fcntl.h>
 #include <poll.h>
+#include <spawn.h>
 #include <signal.h>
 #include <stdbool.h>
 #include <stdint.h>
@@ -25,27 +26,32 @@ static int64_t monotonic_ms(void) {
     return (int64_t)ts.tv_sec * 1000 + ts.tv_nsec / 1000000;
 }
 
+extern char **environ;
+
 static bool copy_to_process(const char *const argv[], const char *text, size_t length) {
     int pair[2];
     if (socketpair(AF_UNIX, SOCK_STREAM, 0, pair) != 0) return false;
-    pid_t pid = fork();
-    if (pid < 0) {
+    /* posix_spawnp avoids calling fork()+execvp() from a multithreaded
+     * ncurses/Ollama application. File actions map the socket to stdin. */
+    posix_spawn_file_actions_t actions;
+    if (posix_spawn_file_actions_init(&actions) != 0) {
         close(pair[0]); close(pair[1]);
         return false;
     }
-    if (pid == 0) {
-        /* Only async-signal-safe operations between fork() and execvp(). */
-        close(pair[0]);
-        if (dup2(pair[1], STDIN_FILENO) < 0) _exit(127);
-        close(pair[1]);
-        int null_fd = open("/dev/null", O_WRONLY);
-        if (null_fd >= 0) {
-            (void)dup2(null_fd, STDOUT_FILENO);
-            (void)dup2(null_fd, STDERR_FILENO);
-            if (null_fd > STDERR_FILENO) close(null_fd);
-        }
-        execvp(argv[0], (char *const *)argv);
-        _exit(127);
+    int err = posix_spawn_file_actions_adddup2(&actions, pair[1], STDIN_FILENO);
+    if (!err) err = posix_spawn_file_actions_addclose(&actions, pair[0]);
+    if (!err) err = posix_spawn_file_actions_addclose(&actions, pair[1]);
+    if (!err) err = posix_spawn_file_actions_addopen(
+        &actions, STDOUT_FILENO, "/dev/null", O_WRONLY, 0);
+    if (!err) err = posix_spawn_file_actions_addopen(
+        &actions, STDERR_FILENO, "/dev/null", O_WRONLY, 0);
+    pid_t pid = -1;
+    if (!err) err = posix_spawnp(&pid, argv[0], &actions, NULL,
+                                 (char *const *)argv, environ);
+    (void)posix_spawn_file_actions_destroy(&actions);
+    if (err) {
+        close(pair[0]); close(pair[1]);
+        return false;
     }
 
     close(pair[1]);
