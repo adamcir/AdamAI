@@ -238,7 +238,7 @@ automatic by default; `/web ask` restores per-URL confirmation.
   `wl-copy --type text/plain;charset=utf-8` when `WAYLAND_DISPLAY` is set;
   otherwise or on failure, it attempts `xclip -selection clipboard -in`
   and `xsel --clipboard --input` when `DISPLAY` is set. Providers are
-  launched with `fork/execvp` and an argument vector, never a shell, with
+  launched with thread-safe `posix_spawnp` and an argument vector, never a shell, with
   bounded IPC and process timeout. Text is UTF-8, max 64 KiB.
 - When no desktop clipboard provider succeeds, the selection remains in
   the internal clipboard and AdamAI attempts OSC 52 as a fallback. OSC 52
