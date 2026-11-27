@@ -42,6 +42,12 @@ Features:
 - Streamed answers, with separately collapsible reasoning when a model provides it.
 - Centered transcript, user panels, simple Markdown blocks and fenced code panels.
 - Compact, auto-expanding Unicode composer (1–5 visible rows); `Ctrl+O` inserts a newline, `Enter` sends.
+- **Copy/paste and selections:** mouse-drag to select chat text, mouse selection
+  in the prompt, Shift+Left/Right to select text, Ctrl+A select all, Ctrl+C
+  copy, Ctrl+X cut the prompt selection, Ctrl+V paste the internal clipboard.
+  Terminal paste (Ctrl+Shift+V) supports multiline text through bracketed
+  paste without accidentally sending a message. OSC 52 also copies selections
+  to the terminal clipboard where supported.
 - Slash-command palette (`/` or `Ctrl+P`), F1 shortcut help, prompt history.
 - Optional workspace sidebar (`Ctrl+B`) and dark/light themes (`/theme`).
 - **Persistent conversations:** auto-save to `~/adam-ai/chats/*.json`, restart recovery,
@@ -263,3 +269,26 @@ JavaScript browser control, configurable authenticated API calls, downloads,
 long-term memory and task indexing, model training/manipulation, and full
 filesystem sandboxing. These require additional provider/backend integration,
 credential handling or stronger isolation.
+
+### Selecting and pasting text
+
+- **Chat:** drag the left mouse button across visible conversation text to
+  highlight a selection; press `Ctrl+C` to copy. Scrollback selections include
+  visual line breaks and Unicode characters.
+- **Prompt:** click to position the caret, drag to select, or hold `Shift`
+  with Left/Right arrows. `Ctrl+A` selects the whole prompt. Typing or pasting
+  replaces selected text. `Ctrl+X` cuts selected prompt text.
+- **Paste:** `Ctrl+V` pastes text copied **inside AdamAI** at the cursor.
+  Use your terminal's `Ctrl+Shift+V` (or its context-menu Paste) to paste
+  the operating system clipboard; bracketed paste safely retains newlines
+  and never interprets pasted Enter as Submit.
+- `Ctrl+C` copies a selection if present; otherwise it retains its previous
+  behavior of cancelling a running model request. `Esc` clears selections.
+- AdamAI additionally attempts to copy selections to the system clipboard
+  through terminal **OSC 52**. Some terminals intentionally block OSC 52;
+  internal copy and `Ctrl+V` still work in that case.
+- Terminal mouse capture may disable ordinary drag selection by the terminal
+  itself. Many terminals allow native text selection using Shift+drag.
+
+Clipboard data remains local to your terminal. Pasted content is inserted as
+text, not interpreted as a shell command or an immediate chat message.

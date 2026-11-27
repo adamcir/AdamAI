@@ -218,3 +218,25 @@ automatic by default; `/web ask` restores per-URL confirmation.
   public domain. Use `/web ask` or disable FS for sensitive projects.
 - No client-side JavaScript, interactive logins, file uploads, arbitrary
   POST requests or unrestricted binary downloads.
+
+## Chat and composer selection / clipboard
+
+- Mouse press/drag/release on the transcript selects visible wrapped lines.
+  Selected glyphs use `C_SELECT`. Selection uses terminal-cell positions so
+  UTF-8 accents and wide CJK characters do not split inside a glyph.
+- Dragging inside the composer selects a range and repositions the insertion
+  caret. Shift+Left/Right, Ctrl+A, Ctrl+X and Backspace/Delete work with the
+  currently selected range. Clipboard insertions replace selection instead of
+  always appending to the end of the prompt.
+- `Ctrl+C`: copies the active selection (or cancels model streaming if there
+  is no selection). `Ctrl+V`: pastes the internal UTF-8 clipboard at the
+  caret. `Ctrl+Shift+V` uses the terminal's external clipboard paste.
+- The terminal is placed into **bracketed paste** mode while AdamAI runs.
+  Newlines from pasted text are inserted literally into the editor; they do
+  not submit prompts. The mode is disabled on normal exit.
+- Copy additionally tries OSC 52 to the terminal clipboard. OSC 52 is
+  optional, so this is not guaranteed to populate the OS clipboard.
+- Selection boundaries, extraction and bounded Unicode insertion are tested
+  in `tests/test_text_selection.c`.
+- Mouse support depends on the terminal emulator; Shift+drag can still be
+  used for the emulator's native selection.

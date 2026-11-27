@@ -11,6 +11,7 @@
 #include "adam/ollama.h"
 #include "adam/web_fetch.h"
 #include "adam/text_wrap.h"
+#include "adam/text_selection.h"
 #include <ncursesw/curses.h>
 #include <curl/curl.h>
 #include <limits.h>
@@ -30,6 +31,9 @@
 #define MAX_CHAT_WIDTH 94
 #define SIDEBAR_WIDTH 29
 #define MAX_EDITOR_ROWS 5
+#define ADAM_PASTE_BEGIN (KEY_MAX + 41)
+#define ADAM_PASTE_END   (KEY_MAX + 42)
+#define ADAM_CLIPBOARD_CAP (64u * 1024u)
 
 /* Pair IDs are constant. All UI colors are configurable through set_theme(). */
 enum {
@@ -82,6 +86,11 @@ typedef struct {
     AdamStream stream;
     wchar_t input[INPUT_CAP];
     size_t input_len, cursor;
+    size_t input_anchor;
+    bool input_selecting, editor_dragging, chat_dragging;
+    bool chat_selected, pasting;
+    AdamTextPoint chat_anchor, chat_caret;
+    char *clipboard;
     wchar_t *history[HISTORY_CAP];
     size_t history_count;
     int history_index; /* -1: current draft, 0: most recent history */
@@ -616,6 +625,50 @@ static void draw_fs_approval(App *a, int x, int top, int width, int height) {
 
 /* The editor and cursor use the exact same word-aware layout.  Without a
  * shared map, the visible text can wrap differently from the caret. */
+static bool input_selection_bounds(const App *a, size_t *start, size_t *end) {
+    if (!a->input_selecting || a->input_anchor == a->cursor) return false;
+    *start = a->input_anchor < a->cursor ? a->input_anchor : a->cursor;
+    *end = a->input_anchor > a->cursor ? a->input_anchor : a->cursor;
+    return true;
+}
+static void move_editor_cursor(App *a, size_t next, bool extend) {
+    if (extend && !a->input_selecting) {
+        a->input_anchor = a->cursor;
+        a->input_selecting = true;
+    } else if (!extend) {
+        a->input_selecting = false;
+    }
+    a->cursor = next > a->input_len ? a->input_len : next;
+}
+
+/* Highlight the exact terminal cells represented by a chat selection.
+ * We keep selection coordinates in the *wrapped* view, including scrollback. */
+static void draw_chat_highlight(const App *a, const ViewLine *line,
+                                size_t index, int y, int x, int width) {
+    if (!a->chat_selected) return;
+    AdamTextPoint first=a->chat_anchor, last=a->chat_caret;
+    if (first.row > last.row ||
+        (first.row==last.row && first.col>last.col)) {
+        AdamTextPoint t=first;first=last;last=t;
+    }
+    if ((int)index<first.row || (int)index>last.row) return;
+    int start = (int)index==first.row ? first.col : 0;
+    int end = (int)index==last.row ? last.col : width;
+    int col=line->indent;
+    for (size_t j=0;line->text && line->text[j];++j) {
+        wchar_t ch=line->text[j];
+        int cells=glyph_width(ch);
+        if (cells<1) cells=1;
+        if (col >= end) break;
+        if (col+cells>start && col<end && col+cells<width) {
+            attrs(C_SELECT,false);
+            mvaddnwstr(y,x+col,&ch,1);
+        }
+        col+=cells;
+    }
+    attrs(C_NORMAL,false);
+}
+
 static void draw_editor(const App *a, const AdamEditorCell *cells,
                         int x, int top, int width, int rows,
                         int *cy, int *cx) {
@@ -636,6 +689,8 @@ static void draw_editor(const App *a, const AdamEditorCell *cells,
     }
 
     attrs(C_NORMAL, false);
+    size_t selected_first=0, selected_last=0;
+    bool selected=input_selection_bounds(a,&selected_first,&selected_last);
     for (size_t i = 0; i < a->input_len; ++i) {
         AdamEditorCell cell = cells[i];
         if (!cell.visible || cell.row < scroll_rows || cell.row >= scroll_rows + rows)
@@ -643,8 +698,11 @@ static void draw_editor(const App *a, const AdamEditorCell *cells,
         wchar_t ch = a->input[i];
         if (ch == L'\t') ch = L' ';
         if (iswcntrl(ch) || glyph_width(ch) > text_w) ch = L'?';
-        if (cell.col + glyph_width(ch) <= text_w)
+        if (cell.col + glyph_width(ch) <= text_w) {
+            if (selected && i>=selected_first && i<selected_last) attrs(C_SELECT,false);
+            else attrs(C_NORMAL,false);
             mvaddnwstr(top + 1 + cell.row - scroll_rows, text_x + cell.col, &ch, 1);
+        }
     }
     attrs(C_NORMAL, false);
 }
@@ -658,7 +716,7 @@ static void draw_composer(const App *a, const AdamEditorCell *cells,
     int hint_y = y + rows + 2;
     line_at(hint_y, x + 1, width - 2,
             a->busy ? "● Generating  ·  Ctrl+C stop  ·  Ctrl+T thinking" :
-                      "Enter send  ·  Ctrl+O newline  ·  Ctrl+P commands", 
+                      "Enter send  ·  Ctrl+V paste  ·  Ctrl+C copy  ·  Ctrl+O newline", 
             a->busy ? C_ACCENT : C_MUTED, false);
 }
 
@@ -735,6 +793,7 @@ static void draw(App *a) {
             }
             wline_at(y, chat_x + line->indent, chat_w - line->indent - 1,
                      line->text, line->color, line->bold);
+            draw_chat_highlight(a,line,idx,y,chat_x,chat_w-1);
         }
         if (a->scroll > 0) {
             /* Scroll indicator stays on the orange workspace border. */
@@ -772,6 +831,7 @@ static void input_set(App *a, const wchar_t *s) {
     wmemcpy(a->input, s, n);
     a->input[n] = 0;
     a->input_len = a->cursor = n;
+    a->input_selecting = false;
     a->command_index = 0;
     a->palette_closed = false;
 }
@@ -838,6 +898,8 @@ static bool save_current_chat(App *a) {
 }
 
 static void init_empty_chat(App *a) {
+    a->chat_selected=false;
+    a->input_selecting=false;
     adam_chat_clear(&a->chat);
     memset(&a->active_chat, 0, sizeof(a->active_chat));
     if (!adam_chat_store_new_id(a->active_chat.id))
@@ -866,6 +928,8 @@ static bool load_saved_chat(App *a, const char *id) {
     }
     adam_chat_clear(&a->chat);
     a->chat = loaded;
+    a->chat_selected=false;
+    a->input_selecting=false;
     a->active_chat = info;
     if (info.model[0]) snprintf(a->model, sizeof(a->model), "%s", info.model);
     a->dirty = false;
@@ -1272,22 +1336,251 @@ static void cancel_stream(App *a) {
 }
 
 static void insert_char(App *a, wchar_t ch) {
-    if (a->input_len + 1 >= INPUT_CAP) return;
-    wmemmove(a->input + a->cursor + 1, a->input + a->cursor,
-             a->input_len - a->cursor + 1);
-    a->input[a->cursor++] = ch;
-    ++a->input_len;
-    a->palette_closed = false;
-    a->command_index = 0;
-    a->history_index = -1;
+    size_t first=a->cursor,last=first;
+    (void)input_selection_bounds(a,&first,&last);
+    if (!adam_prompt_replace(a->input,&a->input_len,&a->cursor,
+                             INPUT_CAP,first,last,&ch,1)) return;
+    a->input_selecting=false;
+    a->chat_selected=false;
+    a->palette_closed=false;
+    a->command_index=0;
+    a->history_index=-1;
 }
 static void backspace(App *a) {
-    if (!a->cursor) return;
-    wmemmove(a->input + a->cursor - 1, a->input + a->cursor,
-             a->input_len - a->cursor + 1);
-    --a->cursor; --a->input_len;
-    a->command_index = 0;
-    a->palette_closed = false;
+    size_t first=a->cursor,last=first;
+    if (!input_selection_bounds(a,&first,&last)) {
+        if (!a->cursor)return;
+        first=a->cursor-1;
+    }
+    (void)adam_prompt_replace(a->input,&a->input_len,&a->cursor,
+                              INPUT_CAP,first,last,L"",0);
+    a->input_selecting=false;
+    a->command_index=0;
+    a->palette_closed=false;
+}
+static void delete_forward(App *a) {
+    size_t first=a->cursor,last=first;
+    if (!input_selection_bounds(a,&first,&last)) {
+        if(a->cursor>=a->input_len)return;
+        last=a->cursor+1;
+    }
+    (void)adam_prompt_replace(a->input,&a->input_len,&a->cursor,
+                              INPUT_CAP,first,last,L"",0);
+    a->input_selecting=false;
+    a->command_index=0;
+    a->palette_closed=false;
+}
+
+
+static void clipboard_osc52(const char *text) {
+    if (!text || !isatty(STDOUT_FILENO)) return;
+    size_t bytes=strlen(text);
+    /* Terminal escape sequence length is limited for compatibility. */
+    if (bytes>16384) return;
+    static const char table[]=
+        "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+    size_t enc_len=((bytes+2)/3)*4;
+    char *encoded=malloc(enc_len+1);
+    if (!encoded) return;
+    size_t pos=0;
+    for (size_t i=0;i<bytes;i+=3) {
+        uint32_t v=(uint32_t)(unsigned char)text[i]<<16;
+        if(i+1<bytes)v|=(uint32_t)(unsigned char)text[i+1]<<8;
+        if(i+2<bytes)v|=(unsigned char)text[i+2];
+        encoded[pos++]=table[(v>>18)&63];
+        encoded[pos++]=table[(v>>12)&63];
+        encoded[pos++]=i+1<bytes?table[(v>>6)&63]:'=';
+        encoded[pos++]=i+2<bytes?table[v&63]:'=';
+    }
+    encoded[pos]=0;
+    /* OSC 52 writes to the terminal clipboard when the terminal allows it.
+     * The in-app clipboard works even when OSC 52 is unsupported. */
+    fflush(stdout);
+    (void)write(STDOUT_FILENO,"\033]52;c;",7);
+    (void)write(STDOUT_FILENO,encoded,pos);
+    (void)write(STDOUT_FILENO,"\a",1);
+    free(encoded);
+}
+static void save_clipboard(App *a, char *text) {
+    if (!text || !*text) {free(text);set_status(a,"No text selected");return;}
+    free(a->clipboard);
+    a->clipboard=text;
+    clipboard_osc52(text);
+    set_status(a,"Copied selection. Ctrl+V paste here; Ctrl+Shift+V terminal paste");
+}
+static char *copy_chat_text(const App *a) {
+    if (!a->chat_selected || !a->chat.count) return NULL;
+    int sidebar=a->sidebar_open && COLS>=108;
+    int cr=sidebar?COLS-SIDEBAR_WIDTH:COLS;
+    int width=cr-8;
+    if(width>MAX_CHAT_WIDTH)width=MAX_CHAT_WIDTH;
+    View v={0};
+    build_view(&v,a,width);
+    AdamTextLine *data=calloc(v.count?v.count:1,sizeof(*data));
+    if(!data){free_view(&v);return NULL;}
+    for(size_t i=0;i<v.count;i++) {
+        data[i].text=v.data[i].text;
+        data[i].indent=v.data[i].indent;
+    }
+    char *result=adam_text_selection_copy(data,v.count,
+                      a->chat_anchor,a->chat_caret,ADAM_CLIPBOARD_CAP);
+    free(data);
+    free_view(&v);
+    return result;
+}
+static char *copy_editor_text(const App *a) {
+    size_t start=0,end=0;
+    if(!input_selection_bounds(a,&start,&end))return NULL;
+    wchar_t *selection=calloc(end-start+1,sizeof(*selection));
+    if(!selection)return NULL;
+    wmemcpy(selection,a->input+start,end-start);
+    size_t bytes=wcstombs(NULL,selection,0);
+    if(bytes==(size_t)-1 || bytes>ADAM_CLIPBOARD_CAP) {
+        free(selection);return NULL;
+    }
+    char *text=malloc(bytes+1);
+    if(text)wcstombs(text,selection,bytes+1);
+    free(selection);
+    return text;
+}
+static void copy_selection(App *a) {
+    char *text=copy_editor_text(a);
+    if(!text)text=copy_chat_text(a);
+    save_clipboard(a,text);
+}
+static void paste_wide(App *a,const wchar_t *text,size_t len) {
+    if(!text || !len)return;
+    size_t begin=a->cursor,end=begin;
+    (void)input_selection_bounds(a,&begin,&end);
+    wchar_t *clean=malloc(len*sizeof(*clean));
+    if(!clean)return;
+    size_t used=0;
+    for(size_t i=0;i<len;i++) {
+        wchar_t ch=text[i];
+        if(ch==L'\r') {
+            if(i+1<len && text[i+1]==L'\n')continue;
+            ch=L'\n';
+        }
+        if(ch==L'\n' || ch==L'\t' || iswprint(ch)) clean[used++]=ch;
+    }
+    if(!adam_prompt_replace(a->input,&a->input_len,&a->cursor,
+                             INPUT_CAP,begin,end,clean,used))
+        set_status(a,"Paste exceeds editor limit (8191 characters)");
+    else {
+        a->input_selecting=false;
+        a->chat_selected=false;
+        a->palette_closed=true; /* pasted slash text must not open palette */
+        a->command_index=0;
+        a->history_index=-1;
+    }
+    free(clean);
+}
+static void paste_internal(App *a) {
+    if(!a->clipboard) {
+        set_status(a,"Clipboard empty. Use Ctrl+Shift+V for system clipboard");
+        return;
+    }
+    wchar_t *wide=to_wide(a->clipboard);
+    if(!wide)return;
+    paste_wide(a,wide,wcslen(wide));
+    free(wide);
+}
+static bool editor_hit(const App *a,int mx,int my,size_t *position) {
+    if(LINES<18 || COLS<52)return false;
+    int cr=(a->sidebar_open && COLS>=108)?COLS-SIDEBAR_WIDTH:COLS;
+    int cw=cr-8;if(cw>MAX_CHAT_WIDTH)cw=MAX_CHAT_WIDTH;
+    int x=(cr-cw)/2, text_x=x+4, text_w=cw-7;
+    AdamEditorCell cells[INPUT_CAP+1];
+    int total=adam_editor_layout(a->input,a->input_len,text_w,cells);
+    int rows=clamp_int(total,1,MAX_EDITOR_ROWS);
+    int editor_y=LINES-rows-4;
+    if(mx<text_x || mx>=text_x+text_w || my<editor_y ||
+       my>=editor_y+rows)return false;
+    int scroll=cells[a->cursor].row>=rows?cells[a->cursor].row-rows+1:0;
+    int row=my-editor_y+scroll, col=mx-text_x;
+    int best=INT_MAX;
+    size_t choice=a->cursor;
+    for(size_t i=0;i<=a->input_len;i++) {
+        if(cells[i].row!=row)continue;
+        int distance=abs(cells[i].col-col);
+        if(distance<best) {best=distance;choice=i;}
+    }
+    if(best==INT_MAX)return false;
+    *position=choice;
+    return true;
+}
+static bool chat_hit(const App *a,int mx,int my,AdamTextPoint *pt) {
+    if(!a->chat.count || LINES<18 || COLS<52)return false;
+    int cr=(a->sidebar_open && COLS>=108)?COLS-SIDEBAR_WIDTH:COLS;
+    int width=cr-8;if(width>MAX_CHAT_WIDTH)width=MAX_CHAT_WIDTH;
+    int x=(cr-width)/2;
+    AdamEditorCell editor[INPUT_CAP+1];
+    int er=clamp_int(adam_editor_layout(a->input,a->input_len,width-7,editor),
+                     1,MAX_EDITOR_ROWS);
+    int top=5, h=LINES-er-5-top-1;
+    if(mx<x || mx>=x+width || my<top || my>=top+h)return false;
+    View v={0};
+    build_view(&v,a,width);
+    int max_scroll=v.count>(size_t)h?(int)v.count-h:0;
+    int scroll=clamp_int(a->scroll,0,max_scroll);
+    int first=(int)v.count-h-scroll;
+    if(first<0)first=0;
+    int index=first+my-top;
+    if(index<0 || (size_t)index>=v.count) {free_view(&v);return false;}
+    *pt=(AdamTextPoint){index,clamp_int(mx-x,0,width-1)};
+    free_view(&v);
+    return true;
+}
+static void handle_mouse(App *a) {
+    MEVENT event;
+    if(getmouse(&event)!=OK)return;
+#ifdef BUTTON4_PRESSED
+    if(event.bstate&BUTTON4_PRESSED) {
+        if(a->scroll<INT_MAX-4)a->scroll+=4;
+        return;
+    }
+#endif
+#ifdef BUTTON5_PRESSED
+    if(event.bstate&BUTTON5_PRESSED) {
+        a->scroll-=4;
+        if(a->scroll<0)a->scroll=0;
+        return;
+    }
+#endif
+    bool press=(event.bstate&BUTTON1_PRESSED)!=0;
+    bool release=(event.bstate&BUTTON1_RELEASED)!=0;
+#ifdef BUTTON1_CLICKED
+    press=press || (event.bstate&BUTTON1_CLICKED)!=0;
+    release=release || (event.bstate&BUTTON1_CLICKED)!=0;
+#endif
+    if(press) {
+        size_t pos;
+        AdamTextPoint cell;
+        if(editor_hit(a,event.x,event.y,&pos)) {
+            a->input_anchor=a->cursor=pos;
+            a->input_selecting=true;
+            a->editor_dragging=true;
+            a->chat_dragging=false;
+            a->chat_selected=false;
+        } else if(chat_hit(a,event.x,event.y,&cell)) {
+            a->chat_anchor=a->chat_caret=cell;
+            a->chat_selected=true;
+            a->chat_dragging=true;
+            a->editor_dragging=false;
+            a->input_selecting=false;
+        }
+    }
+    if(a->editor_dragging) {
+        size_t pos;
+        if(editor_hit(a,event.x,event.y,&pos)) {
+            a->cursor=pos;
+            a->input_selecting=(a->input_anchor!=pos);
+        }
+    } else if(a->chat_dragging) {
+        AdamTextPoint cell;
+        if(chat_hit(a,event.x,event.y,&cell))a->chat_caret=cell;
+    }
+    if(release){a->editor_dragging=false;a->chat_dragging=false;}
 }
 
 static void palette_enter(App *a) {
@@ -1305,6 +1598,20 @@ static void palette_enter(App *a) {
 }
 
 static void input_key(App *a, wint_t key, bool special) {
+    if(special && key==ADAM_PASTE_BEGIN) {a->pasting=true;return;}
+    if(special && key==ADAM_PASTE_END) {a->pasting=false;return;}
+    if(a->pasting) {
+        /* Bracketed paste must not trigger Enter/send, shortcuts, commands
+         * or Y/N approval dialogs. It inserts literal lines into the editor. */
+        if(!a->approval_open && !a->chats_open && !a->help_open && !special) {
+            wchar_t ch=(wchar_t)key;
+            if(ch==L'') ch=L'
+';
+            if(ch==L'
+'||ch==L'	'||iswprint(ch))insert_char(a,ch);
+        }
+        return;
+    }
     if (a->approval_open) {
         if (special) {
             switch(key) {
@@ -1398,18 +1705,32 @@ static void input_key(App *a, wint_t key, bool special) {
     int matches = command_matches(a, found, (int)COMMAND_COUNT);
     if (special) {
         switch (key) {
-            case KEY_LEFT: if (a->cursor) --a->cursor; break;
-            case KEY_RIGHT: if (a->cursor < a->input_len) ++a->cursor; break;
-            case KEY_HOME: a->cursor = 0; break;
-            case KEY_END: a->cursor = a->input_len; break;
-            case KEY_BACKSPACE: backspace(a); break;
-            case KEY_DC:
-                if (a->cursor < a->input_len) {
-                    wmemmove(a->input + a->cursor, a->input + a->cursor + 1,
-                             a->input_len - a->cursor);
-                    --a->input_len;
-                }
+            case KEY_LEFT:
+                move_editor_cursor(a,a->cursor ? a->cursor-1 : 0,false);
                 break;
+            case KEY_RIGHT:
+                move_editor_cursor(a,a->cursor<a->input_len ? a->cursor+1 : a->input_len,false);
+                break;
+            case KEY_HOME: move_editor_cursor(a,0,false); break;
+            case KEY_END: move_editor_cursor(a,a->input_len,false); break;
+#ifdef KEY_SLEFT
+            case KEY_SLEFT:
+                move_editor_cursor(a,a->cursor ? a->cursor-1 : 0,true);
+                break;
+#endif
+#ifdef KEY_SRIGHT
+            case KEY_SRIGHT:
+                move_editor_cursor(a,a->cursor<a->input_len ? a->cursor+1 : a->input_len,true);
+                break;
+#endif
+#ifdef KEY_SHOME
+            case KEY_SHOME: move_editor_cursor(a,0,true); break;
+#endif
+#ifdef KEY_SEND
+            case KEY_SEND: move_editor_cursor(a,a->input_len,true); break;
+#endif
+            case KEY_BACKSPACE: backspace(a); break;
+            case KEY_DC: delete_forward(a); break;
             case KEY_UP:
                 if (matches) a->command_index = (a->command_index + matches - 1) % matches;
                 else history_move(a, +1);
@@ -1428,22 +1749,12 @@ static void input_key(App *a, wint_t key, bool special) {
                 break;
             case KEY_ENTER: if (matches) palette_enter(a); else submit(a); break;
             case KEY_F(1): show_help_message(a); break;
-            case KEY_RESIZE: break;
-#ifdef KEY_MOUSE
-            case KEY_MOUSE: {
-                MEVENT event;
-                if (getmouse(&event) == OK) {
-#ifdef BUTTON4_PRESSED
-                    if (event.bstate & BUTTON4_PRESSED) a->scroll += 4;
-#endif
-#ifdef BUTTON5_PRESSED
-                    if (event.bstate & BUTTON5_PRESSED) {
-                        a->scroll -= 4; if (a->scroll < 0) a->scroll = 0;
-                    }
-#endif
-                }
+            case KEY_RESIZE:
+                a->chat_selected=false;
+                a->editor_dragging=a->chat_dragging=false;
                 break;
-            }
+#ifdef KEY_MOUSE
+            case KEY_MOUSE: handle_mouse(a); break;
 #endif
             default: break;
         }
@@ -1451,7 +1762,22 @@ static void input_key(App *a, wint_t key, bool special) {
     }
     switch (key) {
         case 17: a->running = false; break; /* Ctrl+Q */
-        case 3: if (a->busy) cancel_stream(a); else set_status(a, "Ctrl+Q to quit"); break;
+        case 3: /* Ctrl+C: copy selected text, otherwise cancel generation. */
+            if (a->input_selecting || a->chat_selected) copy_selection(a);
+            else if (a->busy) cancel_stream(a);
+            else set_status(a,"Select chat or prompt text to copy");
+            break;
+        case 22: paste_internal(a); break; /* Ctrl+V: internal clipboard */
+        case 24: { /* Ctrl+X: cut composer selection only */
+            size_t first=0,last=0;
+            if(input_selection_bounds(a,&first,&last)) {
+                save_clipboard(a,copy_editor_text(a));
+                (void)adam_prompt_replace(a->input,&a->input_len,&a->cursor,
+                                           INPUT_CAP,first,last,L"",0);
+                a->input_selecting=false;
+            }
+            break;
+        }
         case 20: a->show_thinking = !a->show_thinking; break; /* Ctrl+T */
         case 2: a->sidebar_open = !a->sidebar_open; break; /* Ctrl+B */
         case 16: /* Ctrl+P: command palette */
@@ -1467,11 +1793,18 @@ static void input_key(App *a, wint_t key, bool special) {
             break;
         case 15: insert_char(a, L'\n'); break; /* Ctrl+O */
         case 21: input_set(a, L""); break; /* Ctrl+U */
-        case 1: a->cursor = 0; break;
-        case 5: a->cursor = a->input_len; break;
-        case 27: /* Esc dismisses suggestions and restores an empty composer. */
+        case 1: /* Ctrl+A: select the entire composer. */
+            a->input_anchor=0;
+            a->cursor=a->input_len;
+            a->input_selecting=a->input_len>0;
+            a->chat_selected=false;
+            break;
+        case 5: move_editor_cursor(a,a->input_len,false); break;
+        case 27: /* Esc clears selections and dismisses suggestions. */
             if (a->input_len == 1 && a->input[0] == L'/') input_set(a, L"");
-            a->palette_closed = true;
+            a->input_selecting=false;
+            a->chat_selected=false;
+            a->palette_closed=true;
             break;
         case 127: case 8: backspace(a); break;
         case L'\n': case L'\r': if (matches) palette_enter(a); else submit(a); break;
@@ -1542,9 +1875,15 @@ int adam_tui_run(void) {
         return 1;
     }
     raw(); noecho(); keypad(stdscr, TRUE); timeout(60);
+    /* Bracketed paste prevents a multiline terminal paste from sending
+     * unintended prompts. Ctrl+Shift+V is handled by the terminal. */
+    (void)define_key("\033[200~", ADAM_PASTE_BEGIN);
+    (void)define_key("\033[201~", ADAM_PASTE_END);
+    (void)write(STDOUT_FILENO,"\033[?2004h",8);
     set_theme(app.light_theme);
-#ifdef BUTTON4_PRESSED
-    mousemask(BUTTON4_PRESSED | BUTTON5_PRESSED, NULL);
+#ifdef KEY_MOUSE
+    mouseinterval(0);
+    mousemask(ALL_MOUSE_EVENTS | REPORT_MOUSE_POSITION, NULL);
 #endif
     while (app.running) {
         process_stream(&app);
@@ -1557,10 +1896,12 @@ int adam_tui_run(void) {
     }
     cancel_stream(&app);
     (void)save_current_chat(&app);
+    (void)write(STDOUT_FILENO,"\033[?2004l",8);
     endwin();
     for (size_t i = 0; i < app.history_count; ++i) free(app.history[i]);
     free(app.draft);
     free(app.approval_details);
+    free(app.clipboard);
     adam_chat_clear(&app.chat);
     curl_global_cleanup();
     return 0;
