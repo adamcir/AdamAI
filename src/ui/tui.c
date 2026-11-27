@@ -11,6 +11,7 @@
 #include "adam/ollama.h"
 #include "adam/web_fetch.h"
 #include "adam/text_wrap.h"
+#include "adam/markdown.h"
 #include "adam/text_selection.h"
 #include "adam/clipboard.h"
 #include <ncursesw/curses.h>
@@ -48,6 +49,7 @@ typedef struct {
     int indent;
     bool bold;
     bool panel;
+    uint8_t *styles; /* inline Markdown decoration, parallel to wchar_t text */
 } ViewLine;
 
 typedef struct {
@@ -154,7 +156,10 @@ static wchar_t *to_wide(const char *s) {
 }
 
 static void free_view(View *v) {
-    for (size_t i = 0; i < v->count; ++i) free(v->data[i].text);
+    for (size_t i = 0; i < v->count; ++i) {
+        free(v->data[i].text);
+        free(v->data[i].styles);
+    }
     free(v->data);
     memset(v, 0, sizeof(*v));
 }
@@ -173,7 +178,7 @@ static bool view_line(View *v, const wchar_t *s, size_t n, int color, int indent
     wchar_t *copy = calloc(n + 1, sizeof(*copy));
     if (!copy) return false;
     if (n) wmemcpy(copy, s, n);
-    v->data[v->count++] = (ViewLine){copy, color, indent, bold, panel};
+    v->data[v->count++] = (ViewLine){copy, color, indent, bold, panel, NULL};
     return true;
 }
 
@@ -220,55 +225,40 @@ static void view_wrap_code(View *v, const char *source, int width, int color,
     view_wrap_mode(v, source, width, color, indent, panel, ADAM_WRAP_VERBATIM);
 }
 
-/* Compact block-level Markdown presentation for common coding answers.
- * Rendering only; the conversation retains exact original bytes. */
-static void view_markdown(View *v, const char *source, int width) {
-    if (!source) return;
-    bool code = false;
-    const char *p = source;
-    while (*p) {
-        const char *end = strchr(p, '\n');
-        size_t len = end ? (size_t)(end - p) : strlen(p);
-        if (len > SIZE_MAX - 1) return;
-        char *line = malloc(len + 1);
-        if (!line) return;
-        memcpy(line, p, len);
-        line[len] = '\0';
-        if (!strncmp(line, "```", 3)) {
-            if (!code) {
-                char label[96];
-                snprintf(label, sizeof(label), "  CODE  %.*s", 64, line + 3);
-                view_label(v, label, C_THINK, 0, true, true);
-            } else {
-                view_line(v, L"", 0, C_PANEL, 0, false, true);
-            }
-            code = !code;
-        } else if (code) {
-            if (*line) view_wrap_code(v, line, width - 2, C_PANEL, 2, true);
-            else view_line(v, L"", 0, C_PANEL, 0, false, true);
-        } else if (!*line) {
-            view_gap(v);
-        } else if (line[0] == '#' && line[1] == ' ') {
-            view_label(v, line + 2, C_ACCENT, 2, true, false);
-        } else if (line[0] == '#' && line[1] == '#' && line[2] == ' ') {
-            view_label(v, line + 3, C_ACCENT, 2, true, false);
-        } else if (line[0] == '-' && line[1] == ' ') {
-            size_t n = strlen(line + 2) + 8;
-            char *bullet = malloc(n);
-            if (bullet) {
-                snprintf(bullet, n, "• %s", line + 2);
-                view_wrap(v, bullet, width - 2, C_NORMAL, 3, false);
-                free(bullet);
-            }
-        } else if (line[0] == '>' && line[1] == ' ') {
-            view_wrap(v, line + 2, width - 2, C_MUTED, 3, false);
-        } else {
-            view_wrap(v, line, width - 2, C_NORMAL, 2, false);
-        }
-        free(line);
-        if (!end) break;
-        p = end + 1;
+/* Markdown is parsed by a separate C17 module, not by the model.
+ * The stored conversation remains the unmodified original Markdown. */
+typedef struct { View *view; } MdOutput;
+
+static bool view_md_emit(const AdamMarkdownLine *md, void *userdata) {
+    MdOutput *context = userdata;
+    int color=C_NORMAL;
+    bool panel=false, bold=false;
+    switch(md->kind) {
+        case ADAM_MD_HEADING: color=C_ACCENT;bold=true;break;
+        case ADAM_MD_CODE_TITLE: color=C_THINK;panel=true;bold=true;break;
+        case ADAM_MD_CODE_LINE: color=C_PANEL;panel=true;break;
+        case ADAM_MD_QUOTE: color=C_MUTED;break;
+        case ADAM_MD_TABLE_HEADER: color=C_ACCENT;panel=true;bold=true;break;
+        case ADAM_MD_TABLE: color=C_PANEL;panel=true;break;
+        case ADAM_MD_RULE: color=C_MUTED;break;
+        case ADAM_MD_BLANK: color=C_NORMAL;break;
+        default: break;
     }
+    View *v=context->view;
+    if(!view_line(v,md->text,md->length,color,md->indent,bold,panel))
+        return false;
+    if(md->length && md->styles) {
+        ViewLine *line=&v->data[v->count-1];
+        line->styles=malloc(md->length);
+        if(!line->styles) return false;
+        memcpy(line->styles,md->styles,md->length);
+    }
+    return true;
+}
+static void view_markdown(View *v,const char *source,int width) {
+    if(!source || width<5)return;
+    MdOutput output={v};
+    (void)adam_markdown_render(source,width-2,view_md_emit,&output);
 }
 
 static void build_view(View *v, const App *a, int width) {
@@ -319,6 +309,43 @@ static void wline_at(int y, int x, int width, const wchar_t *s, int color, bool 
     if (n) mvaddnwstr(y, x, s, (int)n);
     attrs(C_NORMAL, false);
 }
+/* Render styled Markdown spans using ncurses attributes per glyph run.
+ * All coordinates are terminal CELLS, so Czech/CJK Unicode wraps correctly. */
+static void styled_line_at(int y,int x,int width,const ViewLine *line) {
+    if(!line->styles) {
+        wline_at(y,x,width,line->text,line->color,line->bold);
+        return;
+    }
+    if(!line->text || width<=0 || x<0 || x>=COLS || y<0 || y>=LINES)return;
+    int available=width<COLS-x?width:COLS-x;
+    int col=0;
+    for(size_t i=0;line->text[i] && col<available;) {
+        uint8_t flags=line->styles[i];
+        size_t first=i;
+        int before=col;
+        while(line->text[i] && line->styles[i]==flags) {
+            int cw=glyph_width(line->text[i]);
+            if(col+cw>available)break;
+            col+=cw;i++;
+        }
+        if(i==first)break;
+        int color=(flags&ADAM_MD_LINK)?C_GOOD:
+                  (flags&ADAM_MD_CODE && !line->panel)?C_THINK:line->color;
+        int attribute=COLOR_PAIR(color);
+        if(line->bold||(flags&ADAM_MD_BOLD))attribute|=A_BOLD;
+        if(flags&ADAM_MD_LINK)attribute|=A_UNDERLINE;
+#ifdef A_ITALIC
+        if(flags&ADAM_MD_ITALIC)attribute|=A_ITALIC;
+#else
+        if(flags&ADAM_MD_ITALIC)attribute|=A_DIM;
+#endif
+        if(flags&ADAM_MD_STRIKE)attribute|=A_DIM;
+        attrset(attribute);
+        mvaddnwstr(y,x+before,line->text+first,(int)(i-first));
+    }
+    attrs(C_NORMAL,false);
+}
+
 static void line_at(int y, int x, int width, const char *s, int color, bool bold) {
     wchar_t *w = to_wide(s);
     if (!w) return;
@@ -792,8 +819,8 @@ static void draw(App *a) {
                 mvaddch(y, chat_x, ACS_VLINE);
                 attrs(C_NORMAL, false);
             }
-            wline_at(y, chat_x + line->indent, chat_w - line->indent - 1,
-                     line->text, line->color, line->bold);
+            styled_line_at(y,chat_x + line->indent,
+                           chat_w - line->indent - 1,line);
             draw_chat_highlight(a,line,idx,y,chat_x,chat_w-1);
         }
         if (a->scroll > 0) {

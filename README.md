@@ -319,3 +319,23 @@ status bar rather than being saved into the conversation as assistant text.
 
 This reduces wasted repeats but cannot ensure that a language model chooses
 relevant queries or interprets every search result correctly.
+
+## Markdown rendering in the terminal
+
+Assistant replies are rendered as **Markdown** rather than raw literal
+`**bold**` or unformatted pipe tables. AdamAI supports:
+- Bold, italic, strikethrough, backslash escapes, inline `code`, and
+  Markdown links (styled/underlined as text, not yet clickable).
+- Headings `#` through `######`, ordered and unordered lists,
+  blockquotes, horizontal rules, fenced code blocks with language labels.
+- GitHub-flavored Markdown pipe tables with column alignment and
+  multiline wrapping. On narrow terminals, tables become readable
+  stacked `Column: value` rows instead of overflowing the screen.
+- UTF-8/Unicode terminal-cell widths, including Czech diacritics.
+  Text selections/copying return the visible rendered characters, while
+  saved chat messages retain the original Markdown bytes.
+
+Rendering is deliberately lightweight and local: **no HTML execution**,
+images are shown as alt labels, and Markdown links are not interactive yet.
+Unsupported Markdown features degrade to plain text. The renderer is tested
+independently in `tests/test_markdown.c`.

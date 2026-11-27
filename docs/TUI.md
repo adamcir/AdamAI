@@ -266,3 +266,22 @@ automatic by default; `/web ask` restores per-URL confirmation.
 - Tests: `geo_utf8_query` validates Czech accents in encoded Nominatim URLs;
   `ollama_repeat_guard` uses a local fake Ollama API to check the final-only
   fallback without accessing the public Internet.
+
+## Markdown rendering
+
+`src/ui/markdown.c` exposes a pure parser/renderer returning styled
+Unicode rows and terminal-cell indents via a callback. It handles headings,
+inline bold/italic/strike/code, Markdown links/autolinks, escapes, blockquotes,
+numbered/bulleted lists, horizontal rules, fenced code and GFM pipe tables.
+Wide terminals receive column-aligned tables with wrapped cells; narrow
+terminals get stacked labeled values. Raw fenced code retains leading spaces.
+
+The TUI maps Markdown spans to ncurses attributes (bold, italic if available,
+underline for links, dim strikethrough). Parser output is used only for
+presentation; persistence and Ollama history retain the original message.
+The selection/clipboard subsystem copies displayed (rendered) text.
+
+No JavaScript/HTML rendering and no clickable link activation in this
+implementation. Unsupported syntax remains text. `markdown_rendering`
+CTest validates Czech text, inline spans, table layouts, code fences,
+escaping, terminal widths and narrow windows.
