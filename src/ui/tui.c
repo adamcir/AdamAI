@@ -1605,10 +1605,8 @@ static void input_key(App *a, wint_t key, bool special) {
          * or Y/N approval dialogs. It inserts literal lines into the editor. */
         if(!a->approval_open && !a->chats_open && !a->help_open && !special) {
             wchar_t ch=(wchar_t)key;
-            if(ch==L'') ch=L'
-';
-            if(ch==L'
-'||ch==L'	'||iswprint(ch))insert_char(a,ch);
+            if(ch==L'\r') ch=L'\n';
+            if(ch==L'\n'||ch==L'\t'||iswprint(ch))insert_char(a,ch);
         }
         return;
     }
